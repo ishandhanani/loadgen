@@ -17,6 +17,21 @@ pub struct AgenticTrace {
     pub turns: Vec<AgenticTurn>,
 }
 
+impl AgenticTrace {
+    /// Number of turns with no causal dependencies; these keep recorded arrival offsets.
+    pub fn root_request_count(&self) -> usize {
+        self.turns
+            .iter()
+            .filter(|turn| turn.dependencies.is_empty())
+            .count()
+    }
+
+    /// Total number of dependency edges across all turns.
+    pub fn dependency_edge_count(&self) -> usize {
+        self.turns.iter().map(|turn| turn.dependencies.len()).sum()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AgenticTurn {
     pub request: TraceRequest,

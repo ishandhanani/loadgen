@@ -34,21 +34,11 @@ async fn main() -> Result<()> {
                 trace.manifest.distinct_sequence_hashes,
                 tokens.load()?,
             )?;
-            let root_requests = trace
-                .turns
-                .iter()
-                .filter(|turn| turn.dependencies.is_empty())
-                .count();
-            let dependency_edges = trace
-                .turns
-                .iter()
-                .map(|turn| turn.dependencies.len())
-                .sum::<usize>();
             let output = serde_json::json!({
                 "fidelity": "agentic-causal",
                 "source": trace.manifest,
-                "root_requests": root_requests,
-                "dependency_edges": dependency_edges,
+                "root_requests": trace.root_request_count(),
+                "dependency_edges": trace.dependency_edge_count(),
                 "token_dictionary": dictionary.manifest()
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
