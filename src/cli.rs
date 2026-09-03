@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use agent_loadgen_core::HeaderDialect;
@@ -278,6 +279,30 @@ pub enum Command {
         /// Maximum allowed frontend arrival error.
         #[arg(long, default_value_t = 20.0)]
         max_arrival_max_ms: f64,
+    },
+
+    /// Serve plan previews and replay-bundle exports over HTTP for the traces dashboard.
+    Serve {
+        /// dynamo-traces root containing web/data; jobs go to <root>/loadgen-jobs (default ~/dynamo-traces).
+        #[arg(long)]
+        root: Option<PathBuf>,
+
+        /// Address to listen on.
+        #[arg(long, default_value = "127.0.0.1:8096")]
+        listen: SocketAddr,
+
+        /// `export NAME=value` file with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and S3_ENDPOINT_URL
+        /// (default ~/.config/dynamo-traces/env).
+        #[arg(long)]
+        creds: Option<PathBuf>,
+
+        /// Replay-bundle jobs scanning shards at the same time.
+        #[arg(long, default_value_t = 3)]
+        bundle_concurrency: usize,
+
+        /// Newest job directories to keep; older ones are pruned.
+        #[arg(long, default_value_t = 50)]
+        keep_jobs: usize,
     },
 
     /// Join request results with normalized engine telemetry by request ID.
