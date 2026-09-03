@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Neutral balanced profile: every omitted field resolves to the built-in
+# default documented in docs/presets.md. Traffic shape comes only from this
+# file; select the wire header dialect at run time with
+# `--headers {dynamo|claude-code|codex|opencode}` (default dynamo).
+#
+# Override sections and their knobs:
+#   [load]        num_sessions, concurrent_sessions, startup_interval_ms, restart_delay_ms
+#   [trajectory]  turns, think_time_ms, output_tokens
+#   [tokens]      block_size, system_prefix_tokens, tool_catalog_tokens, repository_tokens,
+#                 session_tokens, user_tokens, tool_result_tokens, context_window_tokens
+#   [behavior]    tool_probability, parallel_tool_probability, subagent_probability,
+#                 swarm_probability, completion_probability
+#   [compaction]  enabled, trigger_fraction, summary_input_tokens, summary_output_tokens,
+#                 retained_recent_tokens, abort_probability, retry_probability,
+#                 max_attempts, abort_after_ms
+#   [subagents]   max_depth, turns, fanout, spawn_delay_ms, blocking_probability
+#   [tools]       classes (array of tables), parallel_count, retry_probability
+#   [limits]      max_nodes, max_sessions, max_total_input_tokens
+
+schema_version = 5
+seed = 42
