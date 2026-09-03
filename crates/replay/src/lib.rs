@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use agent_loadgen_core::{AgentContext, AgentKind, TraceManifest};
+use agent_loadgen_core::{AgentContext, HeaderDialect, TraceManifest};
 use agent_loadgen_generate::scenario::{
     CompactionExpectedEffect, GeneratedCompactionAttempt, GeneratedSessionTopology,
 };
@@ -43,7 +43,7 @@ pub enum HttpTransport {
 
 #[derive(Debug, Clone)]
 pub struct ReplayOptions {
-    pub agent: AgentKind,
+    pub header_dialect: HeaderDialect,
     pub model: String,
     pub target: String,
     pub output_dir: PathBuf,
@@ -94,7 +94,7 @@ pub(crate) struct RequestResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct RunSummary {
     pub run_id: String,
-    pub agent: AgentKind,
+    pub header_dialect: HeaderDialect,
     pub model: String,
     pub target: String,
     pub time_scale: f64,

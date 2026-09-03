@@ -6,5 +6,5 @@ mod agent;
 mod contracts;
 pub mod scheduler;
 
-pub use agent::AgentKind;
+pub use agent::HeaderDialect;
 pub use contracts::{AgentContext, Percentiles, TraceManifest, TraceRequest, percentiles};

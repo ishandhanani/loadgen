@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
         }
         Command::Replay {
             trace,
-            agent,
+            header_dialect,
             model,
             target,
             output,
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
             start_delay_ms,
             timeout_seconds,
             time_scale,
-            headers,
+            static_headers,
         } => {
             let trace = load_agentic_trace(
                 &trace,
@@ -87,7 +87,7 @@ async fn main() -> Result<()> {
                 trace,
                 dictionary,
                 ReplayOptions {
-                    agent,
+                    header_dialect,
                     model,
                     target,
                     output_dir: output,
@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
                         fidelity.engine_cache_mode,
                         "engine cache mode",
                     )?,
-                    static_headers: parse_headers(headers)?,
+                    static_headers: parse_headers(static_headers)?,
                 },
             )
             .await?;
@@ -142,6 +142,7 @@ async fn main() -> Result<()> {
         }
         Command::Generate {
             config,
+            header_dialect,
             model,
             target,
             output,
@@ -156,7 +157,7 @@ async fn main() -> Result<()> {
             start_delay_ms,
             timeout_seconds,
             time_scale,
-            headers,
+            static_headers,
         } => {
             let scenario = GeneratedScenario::generate(GeneratorConfig::load(&config)?.resolve()?)?;
             let dictionary = TokenDictionary::new(
@@ -168,7 +169,7 @@ async fn main() -> Result<()> {
                 &scenario,
                 dictionary,
                 ReplayOptions {
-                    agent: scenario.config.agent,
+                    header_dialect,
                     model,
                     target,
                     output_dir: output,
@@ -186,7 +187,7 @@ async fn main() -> Result<()> {
                         fidelity.engine_cache_mode,
                         "engine cache mode",
                     )?,
-                    static_headers: parse_headers(headers)?,
+                    static_headers: parse_headers(static_headers)?,
                 },
             )
             .await?;

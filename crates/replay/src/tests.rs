@@ -162,7 +162,7 @@ async fn replay_sends_shape_and_agent_headers() {
         trace,
         dictionary,
         ReplayOptions {
-            agent: AgentKind::Codex,
+            header_dialect: HeaderDialect::Codex,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -287,7 +287,7 @@ async fn recorded_scheduler_handles_tied_millisecond_arrivals() {
         trace,
         dictionary,
         ReplayOptions {
-            agent: AgentKind::Codex,
+            header_dialect: HeaderDialect::Codex,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -393,7 +393,7 @@ async fn captured_successor_waits_for_actual_completion_plus_recorded_gap() {
         trace,
         dictionary,
         ReplayOptions {
-            agent: AgentKind::Codex,
+            header_dialect: HeaderDialect::Codex,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -430,10 +430,9 @@ async fn generated_graph_releases_tool_successor_after_completion() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let config: GeneratorConfig = toml::from_str(
+    let config = GeneratorConfig::parse(
         r#"
-                schema_version = 4
-                agent = "codex"
+                schema_version = 5
                 seed = 9
 
                 [load]
@@ -480,7 +479,7 @@ async fn generated_graph_releases_tool_successor_after_completion() {
         &scenario,
         dictionary,
         ReplayOptions {
-            agent: AgentKind::Codex,
+            header_dialect: HeaderDialect::Codex,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),

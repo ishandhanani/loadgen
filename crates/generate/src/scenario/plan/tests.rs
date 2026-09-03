@@ -2,10 +2,9 @@
 
 use super::*;
 use crate::scenario::config::UIntDistribution;
-use agent_loadgen_core::AgentKind;
 
-fn config(agent: AgentKind) -> ResolvedGeneratorConfig {
-    let mut config = ResolvedGeneratorConfig::preset(agent, 42);
+fn config() -> ResolvedGeneratorConfig {
+    let mut config = ResolvedGeneratorConfig::defaults(42);
     config.num_sessions = 3;
     config.concurrent_sessions = 3;
     config.turns = UIntDistribution::fixed(4);
@@ -26,15 +25,15 @@ fn config(agent: AgentKind) -> ResolvedGeneratorConfig {
 
 #[test]
 fn generation_is_seed_deterministic() {
-    let first = GeneratedScenario::generate(config(AgentKind::Codex)).unwrap();
-    let second = GeneratedScenario::generate(config(AgentKind::Codex)).unwrap();
+    let first = GeneratedScenario::generate(config()).unwrap();
+    let second = GeneratedScenario::generate(config()).unwrap();
     assert_eq!(first.scenario_digest_sha256, second.scenario_digest_sha256);
     assert_eq!(first.nodes.len(), second.nodes.len());
 }
 
 #[test]
 fn graph_dependencies_only_point_backward() {
-    let scenario = GeneratedScenario::generate(config(AgentKind::ClaudeCode)).unwrap();
+    let scenario = GeneratedScenario::generate(config()).unwrap();
     assert!(scenario.nodes.iter().enumerate().all(|(ordinal, node)| {
         node.dependencies
             .iter()
@@ -52,7 +51,7 @@ fn graph_dependencies_only_point_backward() {
 
 #[test]
 fn profile_preserves_global_prefix_sharing() {
-    let scenario = GeneratedScenario::generate(config(AgentKind::Opencode)).unwrap();
+    let scenario = GeneratedScenario::generate(config()).unwrap();
     let roots = scenario
         .nodes
         .iter()
@@ -67,7 +66,7 @@ fn profile_preserves_global_prefix_sharing() {
 
 #[test]
 fn compaction_rewrites_a_window_and_emits_metadata() {
-    let mut config = config(AgentKind::Codex);
+    let mut config = config();
     config.num_sessions = 1;
     config.concurrent_sessions = 1;
     config.context_window_tokens = 160;
@@ -92,7 +91,7 @@ fn compaction_rewrites_a_window_and_emits_metadata() {
 
 #[test]
 fn compaction_attempts_share_identity_and_apply_once() {
-    let mut config = config(AgentKind::Codex);
+    let mut config = config();
     config.num_sessions = 1;
     config.concurrent_sessions = 1;
     config.context_window_tokens = 160;
@@ -134,7 +133,7 @@ fn compaction_attempts_share_identity_and_apply_once() {
 
 #[test]
 fn blocking_swarm_joins_all_children() {
-    let mut config = config(AgentKind::ClaudeCode);
+    let mut config = config();
     config.num_sessions = 1;
     config.concurrent_sessions = 1;
     config.turns = UIntDistribution::fixed(2);
@@ -189,7 +188,7 @@ fn blocking_swarm_joins_all_children() {
 
 #[test]
 fn closed_loop_stream_restarts_after_its_previous_top_level_session_completes() {
-    let mut config = config(AgentKind::Codex);
+    let mut config = config();
     config.concurrent_sessions = 1;
     config.turns = UIntDistribution::fixed(1);
     config.tool_probability = 0.0;
@@ -219,7 +218,7 @@ fn closed_loop_stream_restarts_after_its_previous_top_level_session_completes() 
 
 #[test]
 fn reports_call_and_time_weighted_tool_parallelism() {
-    let mut config = config(AgentKind::Codex);
+    let mut config = config();
     config.num_sessions = 1;
     config.concurrent_sessions = 1;
     config.turns = UIntDistribution::fixed(2);
