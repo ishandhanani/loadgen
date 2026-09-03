@@ -8,15 +8,15 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub(super) use super::distribution::UIntDistribution;
-use agent_loadgen_core::AgentKind;
 
-pub const GENERATOR_SCHEMA_VERSION: u32 = 4;
+pub const GENERATOR_SCHEMA_VERSION: u32 = 5;
+
+const AGENT_FIELD_REMOVED: &str = "schema 5 removed the `agent` field (shape is now fully defined by this file). Delete the `agent` line, set `schema_version = 5`, and choose the header dialect at run time with `--headers {dynamo|claude-code|codex|opencode}` (default dynamo).";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeneratorConfig {
     pub schema_version: u32,
-    pub agent: AgentKind,
     #[serde(default)]
     pub seed: u64,
     #[serde(default)]
@@ -134,7 +134,6 @@ pub struct ToolClass {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedGeneratorConfig {
-    pub agent: AgentKind,
     pub seed: u64,
     pub num_sessions: usize,
     pub concurrent_sessions: usize,
@@ -182,8 +181,41 @@ impl GeneratorConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read generator config {}", path.display()))?;
-        toml::from_str(&text)
-            .with_context(|| format!("invalid generator config {}", path.display()))
+        Self::parse(&text).with_context(|| format!("invalid generator config {}", path.display()))
+    }
+
+    /// Parse strict profile TOML.
+    ///
+    /// The schema version is checked before the strict struct parse so a
+    /// profile written for an older schema reports what changed instead of an
+    /// unknown-field error. Nothing is ignored: the strict parse still rejects
+    /// unknown fields and the version must match exactly.
+    pub fn parse(text: &str) -> Result<Self> {
+        let value: toml::Value =
+            toml::from_str(text).context("generator config is not valid TOML")?;
+        let table = value
+            .as_table()
+            .context("generator config must be a TOML table")?;
+        let schema_version = table
+            .get("schema_version")
+            .context("generator config is missing `schema_version`")?
+            .as_integer()
+            .context("generator config `schema_version` must be an integer")?;
+        let has_agent = table.contains_key("agent");
+        match u32::try_from(schema_version) {
+            Ok(GENERATOR_SCHEMA_VERSION) if has_agent => {
+                bail!(
+                    "generator schema {GENERATOR_SCHEMA_VERSION} has no `agent` field: {AGENT_FIELD_REMOVED}"
+                )
+            }
+            Ok(GENERATOR_SCHEMA_VERSION) => {}
+            Ok(4) => bail!("generator schema 4 is no longer supported: {AGENT_FIELD_REMOVED}"),
+            _ => bail!(
+                "unsupported generator schema version {schema_version}, expected {GENERATOR_SCHEMA_VERSION}"
+            ),
+        }
+        let config: Self = toml::from_str(text)?;
+        Ok(config)
     }
 
     pub fn resolve(self) -> Result<ResolvedGeneratorConfig> {
@@ -194,7 +226,7 @@ impl GeneratorConfig {
                 GENERATOR_SCHEMA_VERSION
             );
         }
-        let mut resolved = ResolvedGeneratorConfig::preset(self.agent, self.seed);
+        let mut resolved = ResolvedGeneratorConfig::defaults(self.seed);
         replace(&mut resolved.num_sessions, self.load.num_sessions);
         replace(
             &mut resolved.concurrent_sessions,
@@ -316,22 +348,12 @@ fn replace<T>(target: &mut T, value: Option<T>) {
 }
 
 impl ResolvedGeneratorConfig {
-    pub(super) fn preset(agent: AgentKind, seed: u64) -> Self {
-        let (
-            system_prefix_tokens,
-            tool_catalog_tokens,
-            tool_probability,
-            parallel_tool_probability,
-            subagent_probability,
-        ) = match agent {
-            // Preserve the total tool-phase probability while reflecting the
-            // observed harness-specific batching behavior.
-            AgentKind::ClaudeCode => (12_000, 14_000, 0.62, 0.0, 0.10),
-            AgentKind::Codex => (11_000, 9_000, 0.39, 0.19, 0.08),
-            AgentKind::Opencode => (7_000, 11_000, 0.48, 0.08, 0.10),
-        };
+    /// Neutral defaults for every field a profile omits.
+    ///
+    /// There is no per-harness preset: traffic shape comes only from the
+    /// profile, and the wire header dialect is chosen at run time.
+    pub(super) fn defaults(seed: u64) -> Self {
         Self {
-            agent,
             seed,
             num_sessions: 16,
             concurrent_sessions: 8,
@@ -342,16 +364,16 @@ impl ResolvedGeneratorConfig {
             think_time_ms: UIntDistribution::log_normal(750.0, 0.8, 25, 15_000),
             output_tokens: UIntDistribution::log_normal(450.0, 0.9, 16, 4096),
             block_size: 16,
-            system_prefix_tokens: UIntDistribution::fixed(system_prefix_tokens),
-            tool_catalog_tokens: UIntDistribution::fixed(tool_catalog_tokens),
+            system_prefix_tokens: UIntDistribution::fixed(7_000),
+            tool_catalog_tokens: UIntDistribution::fixed(11_000),
             repository_tokens: UIntDistribution::log_normal(2_000.0, 0.7, 256, 12_000),
             session_tokens: UIntDistribution::uniform(128, 1024),
             user_tokens: UIntDistribution::log_normal(180.0, 0.9, 16, 4096),
             tool_result_tokens: UIntDistribution::log_normal(700.0, 1.1, 16, 16_384),
             context_window_tokens: 128_000,
-            tool_probability,
-            parallel_tool_probability,
-            subagent_probability,
+            tool_probability: 0.48,
+            parallel_tool_probability: 0.08,
+            subagent_probability: 0.10,
             swarm_probability: 0.025,
             completion_probability: 0.10,
             compaction_enabled: true,
@@ -550,10 +572,9 @@ mod tests {
 
     #[test]
     fn rejects_trajectories_that_can_have_zero_turns() {
-        let config: GeneratorConfig = toml::from_str(
+        let config = GeneratorConfig::parse(
             r#"
-                schema_version = 4
-                agent = "codex"
+                schema_version = 5
 
                 [trajectory]
                 turns = { kind = "uniform", min = 0, max = 2 }
@@ -565,10 +586,9 @@ mod tests {
 
     #[test]
     fn rejects_removed_same_session_background_requests() {
-        let config = toml::from_str::<GeneratorConfig>(
+        let config = GeneratorConfig::parse(
             r#"
-                schema_version = 4
-                agent = "codex"
+                schema_version = 5
 
                 [behavior]
                 background_request_probability = 0.1
@@ -579,10 +599,9 @@ mod tests {
 
     #[test]
     fn rejects_legacy_top_level_session_names() {
-        let config = toml::from_str::<GeneratorConfig>(
+        let config = GeneratorConfig::parse(
             r#"
-                schema_version = 4
-                agent = "codex"
+                schema_version = 5
 
                 [load]
                 root_sessions = 1
@@ -593,32 +612,64 @@ mod tests {
     }
 
     #[test]
-    fn presets_use_agent_specific_tool_batching() {
-        let claude = ResolvedGeneratorConfig::preset(AgentKind::ClaudeCode, 0);
-        let codex = ResolvedGeneratorConfig::preset(AgentKind::Codex, 0);
-        let opencode = ResolvedGeneratorConfig::preset(AgentKind::Opencode, 0);
+    fn minimal_profile_resolves_to_neutral_defaults() {
+        let resolved = GeneratorConfig::parse("schema_version = 5\nseed = 42\n")
+            .unwrap()
+            .resolve()
+            .unwrap();
+        assert_eq!(resolved.seed, 42);
+        assert_eq!(
+            resolved.system_prefix_tokens,
+            UIntDistribution::fixed(7_000)
+        );
+        assert_eq!(
+            resolved.tool_catalog_tokens,
+            UIntDistribution::fixed(11_000)
+        );
+        assert_eq!(resolved.tool_probability, 0.48);
+        assert_eq!(resolved.parallel_tool_probability, 0.08);
+        assert_eq!(resolved.subagent_probability, 0.10);
+        assert_eq!(resolved.swarm_probability, 0.025);
+        assert_eq!(resolved.completion_probability, 0.10);
+    }
 
-        assert_eq!(claude.parallel_tool_probability, 0.0);
-        assert_eq!(codex.parallel_tool_probability, 0.19);
-        assert_eq!(opencode.parallel_tool_probability, 0.08);
+    #[test]
+    fn schema_four_profile_with_agent_reports_the_migration() {
+        let error = GeneratorConfig::parse(
+            r#"
+                schema_version = 4
+                agent = "codex"
+                seed = 42
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.starts_with("generator schema 4 is no longer supported"));
+        assert!(error.contains("removed the `agent` field"));
+        assert!(error.contains("schema_version = 5"));
+        assert!(error.contains("--headers {dynamo|claude-code|codex|opencode}"));
+    }
 
-        // The calibration redistributes existing tool phases instead of
-        // changing the overall tool-phase rate.
-        for (actual, expected) in [
-            (
-                claude.tool_probability + claude.parallel_tool_probability,
-                0.62,
-            ),
-            (
-                codex.tool_probability + codex.parallel_tool_probability,
-                0.58,
-            ),
-            (
-                opencode.tool_probability + opencode.parallel_tool_probability,
-                0.56,
-            ),
-        ] {
-            assert!((actual - expected).abs() < f64::EPSILON);
-        }
+    #[test]
+    fn current_schema_rejects_the_agent_field() {
+        let error = GeneratorConfig::parse(
+            r#"
+                schema_version = 5
+                agent = "codex"
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.starts_with("generator schema 5 has no `agent` field"));
+        assert!(error.contains("--headers"));
+    }
+
+    #[test]
+    fn unknown_schema_versions_are_rejected() {
+        let error = GeneratorConfig::parse("schema_version = 6\n")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "unsupported generator schema version 6, expected 5");
+        assert!(GeneratorConfig::parse("seed = 1\n").is_err());
     }
 }

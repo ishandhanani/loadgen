@@ -6,7 +6,7 @@ use rand::rngs::StdRng;
 use rand_distr::{Distribution, LogNormal};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum UIntDistribution {
     Fixed {

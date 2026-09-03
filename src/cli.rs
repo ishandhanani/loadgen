@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use agent_loadgen_core::AgentKind;
+use agent_loadgen_core::HeaderDialect;
 use agent_loadgen_replay::HttpTransport;
 use agent_loadgen_replay::token_shape::{SafeTokenAlphabet, TokenAlphabetSource};
 use anyhow::{Context, Result, bail};
@@ -111,9 +111,9 @@ pub enum Command {
         #[arg(required = true)]
         trace: Vec<PathBuf>,
 
-        /// Coding-agent header mapping.
-        #[arg(long, value_enum)]
-        agent: AgentKind,
+        /// Request header dialect: generic Dynamo headers only, or a coding-agent harness mapping on top.
+        #[arg(long = "headers", value_enum, default_value_t = HeaderDialect::Dynamo)]
+        header_dialect: HeaderDialect,
 
         /// Model name sent to Dynamo.
         #[arg(long)]
@@ -174,7 +174,7 @@ pub enum Command {
 
         /// Add a static target header as NAME=VALUE. Repeat the flag for more headers.
         #[arg(long = "header")]
-        headers: Vec<String>,
+        static_headers: Vec<String>,
     },
 
     /// Generate a deterministic scenario without sending traffic.
@@ -193,6 +193,10 @@ pub enum Command {
         /// Versioned TOML generator config.
         #[arg(long)]
         config: PathBuf,
+
+        /// Request header dialect: generic Dynamo headers only, or a coding-agent harness mapping on top.
+        #[arg(long = "headers", value_enum, default_value_t = HeaderDialect::Dynamo)]
+        header_dialect: HeaderDialect,
 
         /// Model name sent to Dynamo.
         #[arg(long)]
@@ -250,7 +254,7 @@ pub enum Command {
 
         /// Add a static target header as NAME=VALUE. Repeat the flag for more headers.
         #[arg(long = "header")]
-        headers: Vec<String>,
+        static_headers: Vec<String>,
     },
 
     /// Compare a source trace with a trace captured during replay.

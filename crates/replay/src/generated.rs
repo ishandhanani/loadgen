@@ -3,7 +3,7 @@
 use std::fs;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use super::artifacts::{SummaryIdentity, summarize, write_json};
@@ -21,9 +21,6 @@ pub async fn run_generated_scenario(
     options: ReplayOptions,
 ) -> Result<RunSummary> {
     validate_options(&options)?;
-    if options.agent != scenario.config.agent {
-        bail!("generated scenario agent does not match the request header adapter");
-    }
     prepare_open_file_limit(options.max_in_flight)?;
     fs::create_dir_all(&options.output_dir).with_context(|| {
         format!(
@@ -123,6 +120,7 @@ impl GeneratedRequestFactory<'_> {
             RequestExecution {
                 output_budget_tokens: node.output_budget_tokens,
                 compaction_attempt: node.compaction_attempt.clone(),
+                session_final: node.session_final,
             },
         )
     }

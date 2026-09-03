@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Deliberately small but topology-rich visual example. Not a production preset.
-schema_version = 4
-agent = "codex"
+schema_version = 5
 seed = 20260819
 
 [load]

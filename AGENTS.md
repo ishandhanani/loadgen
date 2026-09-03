@@ -12,7 +12,9 @@ All traffic is agentic and causal. Captured replay uses Dynamo's lowering policy
 
 Generated traffic is also causal. A model response or sampled agent delay releases the next request. Target latency therefore changes the achieved request rate in both modes.
 
-Captured requests and ordinary generated turns have positive input and output token counts. Compaction attempts can omit an output budget. A session completes with its last model response. Do not add lifecycle-control requests, zero-output close nodes, or final-request headers without a new design decision.
+Captured requests and ordinary generated turns have positive input and output token counts. Compaction attempts can omit an output budget. A session completes with its last model response, which carries `x-dynamo-session-final: true`; that header marks an existing request and never adds one. Do not add lifecycle-control requests or zero-output close nodes without a new design decision.
+
+Traffic shape and wire protocol are separate. The profile or trace defines shape; there is no per-agent preset. `--headers {dynamo|claude-code|codex|opencode}` selects the header dialect at run time and must never influence planning or digests.
 
 ## Subagents
 
@@ -34,12 +36,12 @@ The generator does not support child roles, per-child profiles, child-to-child m
 
 | Path | Purpose |
 |---|---|
-| `crates/core/` | Agent context, trace contracts, percentiles, and stable ready-time queue. No I/O or workload policy. |
+| `crates/core/` | Header dialect enum, agent context, trace contracts, percentiles, and stable ready-time queue. No I/O or workload policy. |
 | `crates/trace/` | Trace v1 parsing, validation, Dynamo-derived causal lowering, and structural comparison. |
 | `crates/generate/` | Strict profile schema, deterministic sampling, serialized scenarios, and synthetic graph planning. |
 | `crates/replay/` | Token synthesis, HTTP/SSE transport, causal schedulers, artifacts, and telemetry joins. |
 | `src/` | Thin `agent-loadgen` CLI: flags, command composition, and exit behavior. |
-| `profiles/` | Small example profiles for supported agents. |
+| `profiles/` | Small example profiles; shape only, no agent selection. |
 | `docs/` | Architecture and detailed usage guides. |
 
 ## Change rules

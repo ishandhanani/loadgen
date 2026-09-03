@@ -153,6 +153,7 @@ impl Planner {
                 })?;
             stream_finals[top_level_stream_slot] = Some(final_node);
         }
+        self.mark_session_finals()?;
         let profile_bytes = serde_json::to_vec(&self.config)?;
         let profile_digest_sha256 = hex::encode(Sha256::digest(&profile_bytes));
         let trace_manifest = self.trace_manifest(profile_digest_sha256.clone())?;
@@ -671,9 +672,32 @@ impl Planner {
             spawned_session_ids: Vec::new(),
             output_budget_tokens,
             compaction_attempt: spec.compaction_attempt,
+            session_final: false,
             request,
         });
         Ok(ordinal)
+    }
+
+    /// Mark the last request of every protocol session.
+    ///
+    /// A session's nodes are appended in causal order, so its highest ordinal
+    /// is its final model request even when generation limits cut a session
+    /// short of a `complete` action.
+    fn mark_session_finals(&mut self) -> Result<()> {
+        let mut finals = BTreeMap::new();
+        for (ordinal, node) in self.nodes.iter().enumerate() {
+            let session_id = &node
+                .request
+                .agent_context
+                .as_ref()
+                .with_context(|| format!("generated node {ordinal} is missing agent context"))?
+                .session_id;
+            finals.insert(session_id.clone(), ordinal);
+        }
+        for ordinal in finals.into_values() {
+            self.nodes[ordinal].session_final = true;
+        }
+        Ok(())
     }
 
     fn segment(&mut self, scope: &str, tokens: u64) -> Result<Vec<u64>> {

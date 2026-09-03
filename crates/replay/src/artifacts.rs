@@ -202,7 +202,7 @@ pub(super) fn summarize(
     }
     RunSummary {
         run_id: identity.run_id,
-        agent: options.agent,
+        header_dialect: options.header_dialect,
         model: options.model.clone(),
         target: identity.target.to_string(),
         time_scale: options.time_scale,

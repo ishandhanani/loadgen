@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
-schema_version = 4
-agent = "codex"
+# Tool-heavy profile: wider root trajectories and an explicit six-class tool
+# catalog with per-class latency and result-size calibration. Shape comes only
+# from this file; choose the header dialect at run time with `--headers`.
+
+schema_version = 5
 seed = 42
 
 [trajectory]

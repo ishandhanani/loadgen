@@ -355,10 +355,9 @@ mod tests {
     use super::*;
     use crate::scenario::config::UIntDistribution;
     use crate::scenario::{GeneratedScenario, GeneratorConfig, ResolvedGeneratorConfig};
-    use agent_loadgen_core::AgentKind;
 
     fn swarm_config(blocking_probability: f64) -> ResolvedGeneratorConfig {
-        let mut config = ResolvedGeneratorConfig::preset(AgentKind::Codex, 7);
+        let mut config = ResolvedGeneratorConfig::defaults(7);
         config.num_sessions = 1;
         config.concurrent_sessions = 1;
         config.turns = UIntDistribution::fixed(2);
@@ -423,13 +422,7 @@ mod tests {
 
     #[test]
     fn graph_requires_current_profile_schema() {
-        let config = toml::from_str::<GeneratorConfig>(
-            r#"
-                schema_version = 4
-                agent = "codex"
-            "#,
-        )
-        .unwrap();
+        let config = GeneratorConfig::parse("schema_version = 5\n").unwrap();
         let scenario = GeneratedScenario::generate(config.resolve().unwrap()).unwrap();
         assert!(
             render_plan_dot(&scenario)

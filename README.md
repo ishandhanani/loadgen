@@ -5,9 +5,11 @@
 It supports two workload modes:
 
 - `replay`: reproduce token counts, KV-prefix topology, agent headers, output lengths, root arrivals, turn delays, and subagent dependencies from `dynamo.request.trace.v1` traces.
-- `generate`: create deterministic Claude Code, Codex, or OpenCode traffic with tools, compaction, subagents, and swarms.
+- `generate`: create deterministic coding-agent traffic with tools, compaction, subagents, and swarms from a strict TOML profile.
 
 Prompt text is synthetic. The fidelity contract is request shape, KV reuse, agent lineage, and timing.
+
+Traffic shape and wire protocol are separate. The trace or profile defines shape. `--headers {dynamo|claude-code|codex|opencode}` on `replay` and `generate` selects the request header dialect: `dynamo` (the default) sends only the generic Dynamo session headers, and a harness dialect adds that harness's session, child, and compaction headers on top. See [Generator defaults](docs/presets.md#header-dialects).
 
 ## Build
 
@@ -28,7 +30,7 @@ Replay it against Dynamo:
 
 ```bash
 target/release/agent-loadgen replay trace.jsonl.gz \
-  --agent codex \
+  --headers codex \
   --model zai-org/GLM-4.7-Flash \
   --target http://127.0.0.1:8000 \
   --output artifacts/replay \
@@ -45,18 +47,19 @@ Create a deterministic plan without sending traffic:
 
 ```bash
 target/release/agent-loadgen plan \
-  --config profiles/codex-balanced.toml \
-  --output artifacts/codex-plan
+  --config profiles/tools-heavy.toml \
+  --output artifacts/tools-heavy-plan
 ```
 
-Run the plan:
+Run the plan, here with Codex-style headers:
 
 ```bash
 target/release/agent-loadgen generate \
-  --config profiles/codex-balanced.toml \
+  --config profiles/tools-heavy.toml \
+  --headers codex \
   --model zai-org/GLM-4.7-Flash \
   --target http://127.0.0.1:8000 \
-  --output artifacts/codex-run \
+  --output artifacts/tools-heavy-run \
   --tokenizer /models/GLM-4.7-Flash
 ```
 
@@ -68,7 +71,7 @@ Generated traffic is closed-loop: model latency, tool time, compaction, and bloc
 - `plan.dot`: Graphviz causal DAG grouped by top-level and child sessions, with spawn, join, and delay labels.
 - `plan.svg`: Graphviz rendering of `plan.dot` when the `dot` executable is available.
 - `requests.jsonl`: one result per completed request, including timing and output fidelity.
-- `run.json`: run configuration, bounded timing summaries, fidelity gates, and pass/fail status.
+- `run.json`: run configuration including the header dialect, bounded timing summaries, fidelity gates, and pass/fail status.
 
 ## Documentation
 
@@ -76,7 +79,7 @@ Generated traffic is closed-loop: model latency, tool time, compaction, and bloc
 - [Workspace architecture](docs/workspace.md): crate ownership, dependency direction, and where to make a change.
 - [Trace replay](docs/replay.md): trace contract, token synthesis, timing gates, comparison, and telemetry joins.
 - [Generator configuration](docs/generator.md): profiles, distributions, tools, and safety limits.
-- [Built-in generator presets](docs/presets.md): every resolved default, checked-in profile overrides, and why each baseline exists.
+- [Generator defaults](docs/presets.md): every resolved default, the header dialects, checked-in profile overrides, and why each baseline exists.
 - [Codex behavior and simulation controls](docs/codex-behavior.md): source-derived agent-loop behavior, interpretation of generator knobs, and known fidelity gaps.
 - [Subagents and swarms](docs/subagents.md): delegation graphs, joins, lineage, KV sharing, and current limits.
 - [Compaction](docs/compaction.md): trigger logic, physical attempts, KV-window changes, and telemetry boundaries.

@@ -162,7 +162,7 @@ async fn replay_sends_shape_and_agent_headers() {
         trace,
         dictionary,
         ReplayOptions {
-            agent: AgentKind::Codex,
+            header_dialect: HeaderDialect::Codex,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -190,6 +190,7 @@ async fn replay_sends_shape_and_agent_headers() {
     let (headers, body) = capture.0.lock().unwrap().clone().unwrap();
     assert_eq!(headers.get("thread-id").unwrap(), "thread-1");
     assert_eq!(headers.get("x-dynamo-session-id").unwrap(), "thread-1");
+    assert_eq!(headers.get("x-dynamo-session-final").unwrap(), "true");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
             headers
@@ -287,7 +288,7 @@ async fn recorded_scheduler_handles_tied_millisecond_arrivals() {
         trace,
         dictionary,
         ReplayOptions {
-            agent: AgentKind::Codex,
+            header_dialect: HeaderDialect::Codex,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -393,7 +394,7 @@ async fn captured_successor_waits_for_actual_completion_plus_recorded_gap() {
         trace,
         dictionary,
         ReplayOptions {
-            agent: AgentKind::Codex,
+            header_dialect: HeaderDialect::Codex,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -426,14 +427,13 @@ async fn generated_graph_releases_tool_successor_after_completion() {
     let capture = Capture::default();
     let app = Router::new()
         .route("/v1/chat/completions", post(shape_endpoint))
-        .with_state(capture);
+        .with_state(capture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let config: GeneratorConfig = toml::from_str(
+    let config = GeneratorConfig::parse(
         r#"
-                schema_version = 4
-                agent = "codex"
+                schema_version = 5
                 seed = 9
 
                 [load]
@@ -469,6 +469,8 @@ async fn generated_graph_releases_tool_successor_after_completion() {
     let scenario = GeneratedScenario::generate(config.resolve().unwrap()).unwrap();
     assert_eq!(scenario.nodes.len(), 2);
     assert_eq!(scenario.nodes[1].dependencies, vec![0]);
+    assert!(!scenario.nodes[0].session_final);
+    assert!(scenario.nodes[1].session_final);
     let dictionary = TokenDictionary::new(
         scenario.trace_manifest.trace_block_size,
         scenario.trace_manifest.distinct_sequence_hashes,
@@ -480,7 +482,7 @@ async fn generated_graph_releases_tool_successor_after_completion() {
         &scenario,
         dictionary,
         ReplayOptions {
-            agent: AgentKind::Codex,
+            header_dialect: HeaderDialect::Codex,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -509,6 +511,13 @@ async fn generated_graph_releases_tool_successor_after_completion() {
     assert!(summary.passed);
     assert!(output.path().join("scenario.json").is_file());
     assert!(output.path().join("plan.dot").is_file());
+    // The capture holds the last request sent, which is the session's final turn.
+    let (headers, _) = capture.0.lock().unwrap().clone().unwrap();
+    assert_eq!(headers.get("x-dynamo-session-final").unwrap(), "true");
+    assert_eq!(
+        headers.get("x-dynamo-session-id").unwrap(),
+        scenario.sessions[0].session_id.as_str()
+    );
     server.abort();
 }
 

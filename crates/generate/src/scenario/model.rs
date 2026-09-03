@@ -56,6 +56,8 @@ pub struct GeneratedNode {
     pub spawned_session_ids: Vec<String>,
     pub output_budget_tokens: Option<u32>,
     pub compaction_attempt: Option<GeneratedCompactionAttempt>,
+    /// True for the last model request of its protocol session.
+    pub session_final: bool,
     pub request: TraceRequest,
 }
 
