@@ -77,14 +77,16 @@ target/release/agent-loadgen inspect trace.jsonl.gz \
   --tokenizer /models/GLM-4.7-Flash
 
 target/release/agent-loadgen replay trace.jsonl.gz \
-  --agent codex \
+  --headers codex \
   --model zai-org/GLM-4.7-Flash \
   --target http://127.0.0.1:8000 \
   --output artifacts/replay \
   --tokenizer /models/GLM-4.7-Flash
 ```
 
-`inspect` reports root count and dependency-edge count in addition to shape statistics. `run.json` labels captured runs with `scheduling_model: agentic_causal`.
+`--headers` selects the wire header dialect and defaults to `dynamo`, which sends only `x-dynamo-session-id`, `x-dynamo-parent-session-id`, and `x-dynamo-session-final` on the last request of each captured session. `claude-code`, `codex`, and `opencode` add that harness's session and child headers on top; `codex` also labels compaction attempts with `x-codex-turn-metadata`. The dialect does not change which requests are sent or when.
+
+`inspect` reports root count and dependency-edge count in addition to shape statistics. `run.json` labels captured runs with `scheduling_model: agentic_causal` and records the `header_dialect`.
 
 ## Compare a captured replay
 

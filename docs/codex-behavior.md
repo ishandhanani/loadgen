@@ -51,7 +51,7 @@ Agent-loadgen uses synthetic Chat Completions messages and `nvext.token_data`. I
 - Tool-class `result_tokens`: external tool output.
 - `tokens.tool_result_tokens`: parent-visible result added after child work.
 
-The source components are derived dynamically, but their resulting token geometry still needs explicit distributions in a synthetic simulator. Calibrate these fields from real tokenized requests or captured KV shapes rather than treating the preset values as universal Codex constants.
+The source components are derived dynamically, but their resulting token geometry still needs explicit distributions in a synthetic simulator. Calibrate these fields from real tokenized requests or captured KV shapes rather than treating the default values as universal Codex constants.
 
 Native Codex does not normally send a forced output-token budget on its Responses requests. `trajectory.output_tokens` remains useful because agent-loadgen needs deterministic decode load and exact output-length validation. It is a load-shaping control, not a native Codex option.
 
@@ -84,7 +84,7 @@ Agent-loadgen makes those runtime outcomes controllable:
 
 Codex itself does not expose these probabilities. They should come from traces for fidelity runs. Direct overrides are valuable for tool-heavy, network-heavy, or failure-heavy stress tests.
 
-### Empirical preset calibration
+### Empirical calibration
 
 A 2026-08-18 analysis of 496 Claude Code sessions and real Codex sessions in [SWE-chat](https://huggingface.co/datasets/SALT-NLP/SWE-chat) found that tool batching is primarily a harness/model behavior rather than a coding-domain behavior:
 
@@ -92,9 +92,9 @@ A 2026-08-18 analysis of 496 Claude Code sessions and real Codex sessions in [SW
 - Codex placed roughly 55–65% of tool calls in overlapping batches, with concurrent `exec_command` clusters accounting for much of that behavior.
 - Call-weighted parallelism was much larger than time-weighted parallelism. Codex's parallel tool-time share ranged from single digits to roughly 27% across samples and counting rules.
 
-The built-in presets now preserve their previous total tool-phase probability while changing the serial/parallel split. Claude Code uses `tool_probability = 0.62` and `parallel_tool_probability = 0.0`. Codex uses `0.39` and `0.19`; with the default uniform parallel count of two to four calls, the expected parallel-call share is about 59%. OpenCode retains its earlier `0.48` and `0.08` split because this study did not provide an OpenCode calibration.
+The generator ships one neutral default split, `tool_probability = 0.48` and `parallel_tool_probability = 0.08`, and no per-harness preset. Write the harness split into the profile explicitly. For Claude Code, the observed behavior is `tool_probability = 0.62` and `parallel_tool_probability = 0.0`. For Codex, use `0.39` and `0.19`; with the default uniform parallel count of two to four calls, the expected parallel-call share is about 59%. Total tool-phase mass is `0.62` for Claude Code and `0.58` for Codex, against the neutral `0.56`. Codex sessions also observed a smaller system prefix and tool catalog than Claude Code: roughly `tokens.system_prefix_tokens = 11000` and `tokens.tool_catalog_tokens = 9000` against `12000` and `14000`.
 
-These defaults are evidence-based starting points, not universal constants. The reported Codex result is sensitive to tool-class inclusion, especially shell execution, and model choice. Fit both action probabilities and tool-class weights from the target workload. Use `scenario.json.tool_parallelism` to check the sampled call-weighted and time-weighted results instead of inferring either from the TOML probabilities.
+These values are evidence-based starting points, not universal constants. The reported Codex result is sensitive to tool-class inclusion, especially shell execution, and model choice. Fit both action probabilities and tool-class weights from the target workload. Use `scenario.json.tool_parallelism` to check the sampled call-weighted and time-weighted results instead of inferring either from the TOML probabilities.
 
 ## Reasoning
 
@@ -125,7 +125,7 @@ Agent-loadgen keeps the full compaction surface because it is useful for calibra
 - `trigger_fraction`, summary sizes, and retained tokens control normal synthetic KV-window replacement.
 - Abort probability, retry probability, attempt limits, and abort timing exercise physical-attempt semantics.
 
-For the studied Codex behavior, set `compaction.trigger_fraction = 0.90`. The built-in generator preset currently uses `0.78`, so the preset is not an exact Codex source default. Summary and replacement-history sizes still require captured traffic because source policy alone does not determine their realized token counts.
+For the studied Codex behavior, set `compaction.trigger_fraction = 0.90`. The built-in default is `0.78`, so the default is not an exact Codex source value. Summary and replacement-history sizes still require captured traffic because source policy alone does not determine their realized token counts.
 
 Compaction aborts and duplicate attempts are fault scenarios. Do not interpret nonzero values as ordinary Codex behavior without trace evidence.
 
@@ -144,7 +144,7 @@ The current generator approximates these behaviors with:
 - `subagents.turns`: child trajectory length.
 - `subagents.max_depth`: recursive depth.
 
-For the studied Codex default, set `subagents.max_depth = 1`. The generator preset currently uses depth two to exercise recursive traffic.
+For the studied Codex default, set `subagents.max_depth = 1`. The generator default is depth two to exercise recursive traffic.
 
 The approximation deliberately exposes useful stress controls, but it does not yet model exact Codex mailbox delivery, explicit wait calls, child close/reuse, live-open-thread exhaustion, or fresh/full/recent fork selection. See [Subagents and swarms](subagents.md) for the implemented graph contract.
 
@@ -162,11 +162,11 @@ Use the controls at different confidence levels:
 |---|---|
 | Reproduce one captured run | Use `replay`; do not infer distributions. |
 | Simulate observed Codex traffic | Fit token, action, timing, reasoning, compaction, and subagent distributions from several native traces. |
-| Approximate Codex from source only | Use the Codex preset, set compaction to 90% and subagent depth to one, and label the remaining distributions as assumptions. |
+| Approximate Codex from source only | Start from `profiles/tools-heavy.toml`, write the Codex tool split and prefix sizes from [Empirical calibration](#empirical-calibration), set compaction to 90% and subagent depth to one, run with `--headers codex`, and label the remaining distributions as assumptions. |
 | Stress a serving feature | Override the relevant probabilities, fanout, sizes, delays, or fault attempts directly. |
 | Compare routing or cache policy | Keep the profile and seed identical across treatments and verify the token path. |
 
-Every run records the fully resolved configuration and its digest in `scenario.json`. Preserve that artifact with benchmark results; the name of a profile alone is not enough to reproduce a run after presets evolve.
+Every run records the fully resolved configuration and its digest in `scenario.json`. Preserve that artifact with benchmark results; the name of a profile alone is not enough to reproduce a run after defaults evolve. `run.json` records the header dialect, which is not part of the plan.
 
 ## Source index
 

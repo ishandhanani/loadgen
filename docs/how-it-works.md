@@ -28,7 +28,7 @@ Both modes use the same request and result path:
 
 1. Convert trace hashes or generated block labels into deterministic token IDs.
 2. Send the IDs through `nvext.token_data` with valid dummy Chat Completions messages.
-3. Add the selected Claude Code, Codex, or OpenCode lineage headers.
+3. Add the generic Dynamo session headers (`x-dynamo-session-id`, `x-dynamo-parent-session-id`, and `x-dynamo-session-final` on a session's last request), plus the harness headers of the `--headers` dialect when one other than `dynamo` is selected.
 4. Stream the response and record TTFT, completion usage, status, and selected Dynamo headers.
 5. Append the result to `requests.jsonl` and update bounded timing histograms.
 
@@ -62,7 +62,7 @@ Generation has a planning phase and an execution phase.
 
 ### Planning
 
-`plan` resolves a strict TOML profile over the selected agent preset and uses one seeded RNG to build a finite dependency graph. Each node records:
+`plan` resolves a strict TOML profile over the neutral defaults and uses one seeded RNG to build a finite dependency graph. The header dialect is not an input to planning. Each node records:
 
 - Session and parent-session identity.
 - KV block sequence and output budget.
@@ -171,7 +171,7 @@ Cache policy remains outside this project. `join-telemetry` only correlates requ
 |---|---|
 | `agent-loadgen-core` | Public request and agent-context contracts, percentile summaries, and the stable ready-time queue. |
 | `agent-loadgen-trace` | Trace v1 parsing, agentic causal lowering, and source-versus-captured comparison. |
-| `agent-loadgen-generate` | Presets, strict TOML profile validation, seeded distributions, and generated scenario planning. |
+| `agent-loadgen-generate` | Neutral defaults, strict TOML profile validation, seeded distributions, and generated scenario planning. |
 | `agent-loadgen-replay` | Token shaping, request transport, captured and generated causal schedulers, run artifacts, and telemetry joins. |
 | `agent-loadgen` | CLI flags and command wiring only. |
 

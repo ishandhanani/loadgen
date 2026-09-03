@@ -2,9 +2,11 @@
 
 Generator profiles are strict, versioned TOML. Unknown fields and unsupported schema versions fail during planning. `scenario.json` contains the fully resolved configuration, so a run does not depend on hidden defaults after planning.
 
-Schema version 4 calls the load controls `num_sessions` and `concurrent_sessions`. They count only top-level agent session trees; subagent sessions are generated descendants in those trees. This version also retains the removal of `behavior.background_request_probability`: independent work uses subagents with separate session lineage and explicit dependencies.
+Schema version 5 defines traffic shape entirely in the profile. There is no `agent` field and no per-agent preset: every omitted field resolves to the single neutral default set in [Generator defaults](presets.md). The coding-agent harness is a run-time wire choice, `--headers {dynamo|claude-code|codex|opencode}` (default `dynamo`), and it never changes the plan or its digests.
 
-Schema 3 profiles are intentionally rejected. Replace `root_sessions` with `num_sessions` and `concurrent_agents` with `concurrent_sessions`; there are no compatibility aliases.
+Schema 4 profiles are rejected with a migration message: delete the `agent` line, set `schema_version = 5`, and pass `--headers` if a harness dialect is wanted. The five values the old presets varied (`tokens.system_prefix_tokens`, `tokens.tool_catalog_tokens`, `behavior.tool_probability`, `behavior.parallel_tool_probability`, `behavior.subagent_probability`) can be written into the profile explicitly to reproduce an old preset. Schema 3 names (`root_sessions`, `concurrent_agents`) remain rejected; there are no compatibility aliases.
+
+The load controls `num_sessions` and `concurrent_sessions` count only top-level agent session trees; subagent sessions are generated descendants in those trees. Independent work uses subagents with separate session lineage and explicit dependencies.
 
 ## Execution model
 
@@ -39,16 +41,15 @@ The graph intentionally does not assign durations to model requests. Generated t
 ## Minimal profile
 
 ```toml
-schema_version = 4
-agent = "codex"
+schema_version = 5
 seed = 42
 ```
 
-`agent` selects the `claude-code`, `codex`, or `opencode` structural preset. Every remaining field is an optional override. Checked-in profiles contain only intentional deviations from those presets; the sections below define the complete surface.
+Every other field is an optional override of the neutral defaults. Checked-in profiles contain only intentional deviations from those defaults; the sections below define the complete surface.
 
-See [Built-in generator presets](presets.md) for every resolved default, the checked-in profile overrides, and the rationale behind each value.
+See [Generator defaults](presets.md) for every resolved default, the checked-in profile overrides, and the rationale behind each value.
 
-The override surface is intentionally detailed. Some fields correspond to native agent settings, while others make model-selected runtime outcomes deterministic and tunable for simulation. See [Codex behavior and simulation controls](codex-behavior.md) for a source-derived interpretation of the Codex preset and each class of knob.
+The override surface is intentionally detailed. Some fields correspond to native agent settings, while others make model-selected runtime outcomes deterministic and tunable for simulation. See [Codex behavior and simulation controls](codex-behavior.md) for a source-derived interpretation of each class of knob and the Codex-specific values to write into a profile.
 
 ## Distributions
 
@@ -101,7 +102,7 @@ These are probabilities per model turn, not fractions of tool calls. A parallel 
 
 ## Tool classes
 
-`tools.classes` replaces the preset list. Weights are relative and do not need to sum to one. Each selected class samples latency and result size, then independently samples `error_probability`. `tools.retry_probability` controls whether a failed call adds one more latency and result sample. `tools.parallel_count` controls tool fanout for a parallel action.
+`tools.classes` replaces the default list. Weights are relative and do not need to sum to one. Each selected class samples latency and result size, then independently samples `error_probability`. `tools.retry_probability` controls whether a failed call adds one more latency and result sample. `tools.parallel_count` controls tool fanout for a parallel action.
 
 ```toml
 [tools]
