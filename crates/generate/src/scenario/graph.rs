@@ -44,12 +44,12 @@ pub fn write_plan_graph(
     Ok(PlanGraphArtifacts { dot_path, svg_path })
 }
 
-/// Render the plan as Graphviz DOT.
+/// Render the plan as Graphviz DOT without writing any file.
 ///
 /// The graph is a causal overview, not a wall-clock forecast: it includes the
 /// sampled client-side delay before each request, while target model-service
 /// time remains a runtime-dependent closed-loop value.
-fn render_plan_dot(scenario: &GeneratedScenario) -> Result<String> {
+pub fn render_plan_dot(scenario: &GeneratedScenario) -> Result<String> {
     let sessions = scenario
         .sessions
         .iter()

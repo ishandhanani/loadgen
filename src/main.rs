@@ -34,21 +34,11 @@ async fn main() -> Result<()> {
                 trace.manifest.distinct_sequence_hashes,
                 tokens.load()?,
             )?;
-            let root_requests = trace
-                .turns
-                .iter()
-                .filter(|turn| turn.dependencies.is_empty())
-                .count();
-            let dependency_edges = trace
-                .turns
-                .iter()
-                .map(|turn| turn.dependencies.len())
-                .sum::<usize>();
             let output = serde_json::json!({
                 "fidelity": "agentic-causal",
                 "source": trace.manifest,
-                "root_requests": root_requests,
-                "dependency_edges": dependency_edges,
+                "root_requests": trace.root_request_count(),
+                "dependency_edges": trace.dependency_edge_count(),
                 "token_dictionary": dictionary.manifest()
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
@@ -217,6 +207,34 @@ async fn main() -> Result<()> {
                 bail!("replay fidelity comparison failed");
             }
         }
+        Command::Serve {
+            root,
+            listen,
+            creds,
+            bundle_concurrency,
+            keep_jobs,
+        } => {
+            agent_loadgen_serve::init_tracing();
+            let root = match root {
+                Some(root) => root,
+                None => home_dir()?.join("dynamo-traces"),
+            };
+            let creds = match creds {
+                Some(creds) => creds,
+                None => home_dir()?.join(".config/dynamo-traces/env"),
+            };
+            agent_loadgen_serve::run(agent_loadgen_serve::ServeOptions {
+                root,
+                listen,
+                creds,
+                limits: agent_loadgen_serve::ServeLimits {
+                    bundle_concurrency,
+                    keep_jobs,
+                    ..agent_loadgen_serve::ServeLimits::default()
+                },
+            })
+            .await?;
+        }
         Command::JoinTelemetry {
             requests,
             engine_telemetry,
@@ -227,6 +245,12 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn home_dir() -> Result<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .context("HOME is not set; pass --root and --creds explicitly")
 }
 
 fn parse_headers(headers: Vec<String>) -> Result<Vec<(String, String)>> {

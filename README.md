@@ -65,6 +65,18 @@ target/release/agent-loadgen generate \
 
 Generated traffic is closed-loop: model latency, tool time, compaction, and blocking subagent joins determine when the next request becomes ready. Every subagent is a separate child session with explicit parent lineage. Non-blocking children may continue after their parent advances.
 
+## Serve the dashboard API
+
+Run the HTTP service that turns dashboard sessions into replay bundles and TOML profiles into plan previews, all in process:
+
+```bash
+target/release/agent-loadgen serve \
+  --root ~/dynamo-traces \
+  --listen 127.0.0.1:8096
+```
+
+It reads dashboard data under `--root`, scans the request-trace object store with credentials from `~/.config/dynamo-traces/env`, and writes job artifacts to `<root>/loadgen-jobs/`. It never sends load itself. See [HTTP service](docs/serve.md).
+
 ## Outputs
 
 - `scenario.json`: resolved generated profile and causal graph.
@@ -83,6 +95,7 @@ Generated traffic is closed-loop: model latency, tool time, compaction, and bloc
 - [Codex behavior and simulation controls](docs/codex-behavior.md): source-derived agent-loop behavior, interpretation of generator knobs, and known fidelity gaps.
 - [Subagents and swarms](docs/subagents.md): delegation graphs, joins, lineage, KV sharing, and current limits.
 - [Compaction](docs/compaction.md): trigger logic, physical attempts, KV-window changes, and telemetry boundaries.
+- [HTTP service](docs/serve.md): `agent-loadgen serve` endpoints, replay-bundle job model, caches and limits, and deployment behind Caddy.
 - [Complex concurrent plan example](examples/complex-concurrency/README.md): a topology-rich TOML profile with its rendered causal graph.
 
 ## Current boundaries
