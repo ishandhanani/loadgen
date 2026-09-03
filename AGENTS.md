@@ -40,6 +40,7 @@ The generator does not support child roles, per-child profiles, child-to-child m
 | `crates/trace/` | Trace v1 parsing, validation, Dynamo-derived causal lowering, and structural comparison. |
 | `crates/generate/` | Strict profile schema, deterministic sampling, serialized scenarios, and synthetic graph planning. |
 | `crates/replay/` | Token synthesis, HTTP/SSE transport, causal schedulers, artifacts, and telemetry joins. |
+| `crates/serve/` | HTTP service for the traces dashboard: in-process plan previews, replay-bundle export from the trace store, job state, caches, and limits. Depends on `trace`, `generate`, and `replay`; nothing depends on it. |
 | `src/` | Thin `agent-loadgen` CLI: flags, command composition, and exit behavior. |
 | `profiles/` | Small example profiles; shape only, no agent selection. |
 | `docs/` | Architecture and detailed usage guides. |
@@ -51,7 +52,7 @@ The generator does not support child roles, per-child profiles, child-to-child m
 - Keep the profile schema strict. Reject unknown fields.
 - Keep prompt semantics and tool execution out of scope.
 - Keep cache-policy decisions out of this repository.
-- Keep `core` free of HTTP, Tokio, tokenizers, trace parsing, and generator policy. Among this workspace's crates, `trace` and `generate` may depend only on `core`; `replay` may consume both but neither may depend on `replay`.
+- Keep `core` free of HTTP, Tokio, tokenizers, trace parsing, and generator policy. Among this workspace's crates, `trace` and `generate` may depend only on `core`; `replay` may consume both but neither may depend on `replay`; `serve` may consume all of them and no crate depends on `serve`.
 - Add behavior details to `docs/`. Keep `README.md` as a short entry point.
 - Keep compaction and subagent behavior in their dedicated guides.
 - Update tests and docs when a timing, token-shape, or dependency contract changes.
