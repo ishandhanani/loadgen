@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 
@@ -34,9 +35,11 @@ pub async fn run_agentic_replay(
     let run_id = Uuid::new_v4().to_string();
     let token_manifest = dictionary.manifest().clone();
     let options = Arc::new(options);
+    let session_finals = session_final_flags(&trace);
     let workload = CapturedWorkload {
         request_factory: CapturedRequestFactory {
             trace: &trace,
+            session_finals,
             dictionary: &dictionary,
             client: client.clone(),
             target: target.clone(),
@@ -91,8 +94,27 @@ impl CausalWorkload for CapturedWorkload<'_> {
     }
 }
 
+/// Flag the last request of each captured session by ordinal.
+///
+/// Turn index equals request ordinal, and ordinals follow recorded arrival, so
+/// the highest index per session ID is that session's final model request.
+fn session_final_flags(trace: &AgenticTrace) -> Vec<bool> {
+    let mut finals: HashMap<&str, usize> = HashMap::with_capacity(trace.manifest.session_count);
+    for (ordinal, turn) in trace.turns.iter().enumerate() {
+        if let Some(context) = &turn.request.agent_context {
+            finals.insert(context.session_id.as_str(), ordinal);
+        }
+    }
+    let mut flags = vec![false; trace.turns.len()];
+    for ordinal in finals.into_values() {
+        flags[ordinal] = true;
+    }
+    flags
+}
+
 struct CapturedRequestFactory<'a> {
     trace: &'a AgenticTrace,
+    session_finals: Vec<bool>,
     dictionary: &'a TokenDictionary,
     client: reqwest::Client,
     target: String,
@@ -117,6 +139,7 @@ impl CapturedRequestFactory<'_> {
             RequestExecution {
                 output_budget_tokens: Some(turn.request.output_tokens),
                 compaction_attempt: None,
+                session_final: self.session_finals[ordinal],
             },
         )
     }

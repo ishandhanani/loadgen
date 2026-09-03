@@ -50,6 +50,30 @@ fn graph_dependencies_only_point_backward() {
 }
 
 #[test]
+fn every_session_marks_exactly_its_last_request_final() {
+    let scenario = GeneratedScenario::generate(config()).unwrap();
+    assert!(scenario.sessions.len() > 1);
+    for session in &scenario.sessions {
+        let ordinals = scenario
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                node.request.agent_context.as_ref().unwrap().session_id == session.session_id
+            })
+            .map(|(ordinal, _)| ordinal)
+            .collect::<Vec<_>>();
+        let finals = ordinals
+            .iter()
+            .filter(|ordinal| scenario.nodes[**ordinal].session_final)
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(finals, vec![*ordinals.last().unwrap()]);
+        assert_eq!(scenario.nodes[finals[0]].action, "complete");
+    }
+}
+
+#[test]
 fn profile_preserves_global_prefix_sharing() {
     let scenario = GeneratedScenario::generate(config()).unwrap();
     let roots = scenario

@@ -120,6 +120,7 @@ impl GeneratedRequestFactory<'_> {
             RequestExecution {
                 output_budget_tokens: node.output_budget_tokens,
                 compaction_attempt: node.compaction_attempt.clone(),
+                session_final: node.session_final,
             },
         )
     }

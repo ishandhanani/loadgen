@@ -179,6 +179,8 @@ struct PreparedMetadata {
 struct RequestExecution {
     output_budget_tokens: Option<u32>,
     compaction_attempt: Option<GeneratedCompactionAttempt>,
+    /// Last request of its protocol session; sent as `x-dynamo-session-final`.
+    session_final: bool,
 }
 
 fn millis(duration: Duration) -> f64 {
