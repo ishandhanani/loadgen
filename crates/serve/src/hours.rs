@@ -4,13 +4,29 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::DateTime;
 
 /// Maximum shard-hours one interactive bundle may scan.
 pub const MAX_SHARD_HOURS: usize = 12;
 
 const MS_PER_HOUR: i64 = 3_600_000;
+
+/// A session spanning more than [`MAX_SHARD_HOURS`] shard-hours.
+#[derive(Debug, Clone, Copy)]
+pub struct TooManyHours(pub usize);
+
+impl std::fmt::Display for TooManyHours {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "session spans {} shard-hours (> {MAX_SHARD_HOURS}); too large for an interactive export",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for TooManyHours {}
 
 /// One UTC hour, counted from the Unix epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -55,10 +71,7 @@ pub fn expand_hours(timestamps_ms: impl IntoIterator<Item = i64>) -> Result<Vec<
         }
     }
     if hours.len() > MAX_SHARD_HOURS {
-        bail!(
-            "session spans {} shard-hours (> {MAX_SHARD_HOURS}); too large for an interactive export",
-            hours.len()
-        );
+        return Err(TooManyHours(hours.len()).into());
     }
     Ok(hours.into_iter().collect())
 }
@@ -94,5 +107,6 @@ mod tests {
         assert_eq!(ok.len(), 12);
         let error = expand_hours((0..11).map(|i| base + i * MS_PER_HOUR)).unwrap_err();
         assert!(error.to_string().contains("13 shard-hours (> 12)"));
+        assert!(error.is::<TooManyHours>());
     }
 }

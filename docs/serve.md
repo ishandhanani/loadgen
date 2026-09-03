@@ -36,6 +36,7 @@ All responses are JSON except the two file downloads. Errors are `{"error": "...
 | `POST /plan` | Body `{"toml": "<profile>"}` (at most 64 000 bytes). Plans synchronously and returns the preview described below. |
 | `GET /jobs/{id}/scenario.json` | The planned `scenario.json`. Served with `Content-Encoding: gzip` when stored compressed; browsers and `curl --compressed` decode it transparently. |
 | `GET /jobs/{id}/plan.svg` | Graphviz rendering when `dot` was available and the scenario had at most 500 nodes; otherwise 404. |
+| `GET /metrics` | Prometheus text exposition (`text/plain; version=0.0.4`). See [Metrics](#metrics). |
 
 ## Replay bundle jobs
 
@@ -91,6 +92,51 @@ Artifacts under the job directory: `config.toml`, `plan.dot` (always), `plan.svg
 
 Plan cache: identical TOML text (by SHA-256) returns the stored response with the original `job_id`.
 
+## Metrics
+
+`GET /metrics` serves a process-local Prometheus registry. Names and labels are a contract with the Grafana dashboard. Durations are seconds.
+
+Counters:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `loadgen_serve_http_requests_total` | `route`, `method`, `status` | Every request. `route` is the matched axum pattern (`/jobs/{id}`), or `unmatched` for 404 fallbacks. |
+| `loadgen_serve_jobs_total` | `kind` (`replay`, `plan`), `result` (`done`, `error`, `cached`) | Job outcomes. `cached` is a join-in-flight or cache hit that returned an existing job instead of doing work. |
+| `loadgen_serve_client_jobs_total` | `client`, `kind` | Accepted `POST /plan` and `POST /replay-bundle` submissions per client, including cache hits. `client` is the first `X-Forwarded-For` hop, else the peer IP; at most 500 distinct values are tracked, then `other`. |
+| `loadgen_serve_shards_scanned_total` | | Shards scanned by bundle jobs. |
+| `loadgen_serve_shard_bytes_total` | | Compressed bytes downloaded from the shard store. |
+| `loadgen_serve_lines_scanned_total` | | Trace lines read. |
+| `loadgen_serve_records_kept_total` | | Records written to bundles after merge and deduplication. |
+| `loadgen_serve_zero_output_dropped_total` | | `request_end` records dropped for zero output tokens. |
+| `loadgen_serve_s3_errors_total` | | Failed shard listing or download calls. |
+| `loadgen_serve_rejected_total` | `reason` (`per_ip_cap`, `too_many_hours`, `bad_request`, `not_found`) | Refused requests. |
+
+Gauges:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `loadgen_serve_jobs_inflight` | `kind` | Jobs running now. |
+| `loadgen_serve_jobs_queued` | | Bundle jobs waiting for a scan permit. |
+| `loadgen_serve_active_clients` | `window` (`15m`, `24h`) | Distinct clients that submitted a job within the window, computed at scrape time. |
+| `loadgen_serve_build_info` | `version` | Always 1. |
+
+Histograms:
+
+| Metric | Labels | Buckets |
+|---|---|---|
+| `loadgen_serve_http_request_duration_seconds` | `route` | 1 ms to 10 s |
+| `loadgen_serve_plan_duration_seconds` | | 10 ms to 30 s |
+| `loadgen_serve_bundle_job_duration_seconds` | `result` (`done`, `error`) | 0.5 s to 900 s, including queue time |
+
+Prometheus scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: loadgen-serve
+    static_configs:
+      - targets: ["localhost:8096"]
+```
+
 ## Deployment
 
 systemd user unit (`~/.config/systemd/user/agent-loadgen-serve.service`):
@@ -132,5 +178,6 @@ handle_path /api/loadgen/* {
 | `crates/serve/src/plan.rs` | In-process planning, summary and timeline, artifact storage. |
 | `crates/serve/src/shards.rs` | `ShardSource` trait with the S3 and local-directory implementations, shard listing. |
 | `crates/serve/src/jobs.rs` | `state.json` schema, atomic writes, job index (in-flight, caches, queue, per-client counts), pruning. |
+| `crates/serve/src/metrics.rs` | Prometheus registry, HTTP middleware, client activity tracking, `/metrics` handler. |
 | `crates/serve/src/hours.rs` | Shard-hour expansion and the 12-hour limit. |
 | `crates/serve/src/creds.rs` | `export`-file credential parsing. |

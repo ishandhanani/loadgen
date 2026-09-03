@@ -5,6 +5,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -21,7 +22,9 @@ use tracing::{info, warn};
 
 use crate::AppState;
 use crate::bundle::{BundleJob, BundleRequest, resolve_bundle, run_bundle_job};
+use crate::hours::TooManyHours;
 use crate::jobs::{JobState, is_safe_id};
+use crate::metrics::{Rejection, metrics_handler, track_http};
 use crate::plan::{
     MAX_TOML_BYTES, PlanFailure, materialize_scenario_blocking, run_plan_blocking, toml_sha256,
 };
@@ -34,14 +37,28 @@ const LOG_TAIL_CHARS: usize = 4000;
 pub struct ApiError {
     pub status: StatusCode,
     pub message: String,
+    /// `loadgen_serve_rejected_total{reason}` label, when the error is a refusal.
+    pub reason: Option<&'static str>,
 }
 
 impl ApiError {
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        let reason = match status {
+            StatusCode::BAD_REQUEST => Some("bad_request"),
+            StatusCode::NOT_FOUND => Some("not_found"),
+            StatusCode::TOO_MANY_REQUESTS => Some("per_ip_cap"),
+            _ => None,
+        };
         Self {
             status,
             message: message.into(),
+            reason,
         }
+    }
+
+    fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = Some(reason);
+        self
     }
 
     fn bad_request(message: impl Into<String>) -> Self {
@@ -60,7 +77,12 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, axum::Json(json!({ "error": self.message }))).into_response()
+        let mut response =
+            (self.status, axum::Json(json!({ "error": self.message }))).into_response();
+        if let Some(reason) = self.reason {
+            response.extensions_mut().insert(Rejection(reason));
+        }
+        response
     }
 }
 
@@ -104,6 +126,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/jobs/{id}/bundle", get(bundle))
         .route("/jobs/{id}/scenario.json", get(scenario))
         .route("/jobs/{id}/plan.svg", get(plan_svg))
+        .route("/metrics", get(metrics_handler))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            track_http,
+        ))
         .with_state(state)
 }
 
@@ -136,12 +163,21 @@ async fn replay_bundle(
     let resolved = tokio::task::spawn_blocking(move || resolve_bundle(&web_dir, &resolve_request))
         .await
         .map_err(|error| ApiError::internal(anyhow::anyhow!("resolve task panicked: {error}")))?
-        .map_err(|error| ApiError::bad_request(format!("{error:#}")))?
+        .map_err(|error| {
+            let rejection = ApiError::bad_request(format!("{error:#}"));
+            if error.is::<TooManyHours>() {
+                rejection.with_reason("too_many_hours")
+            } else {
+                rejection
+            }
+        })?
         .ok_or_else(|| ApiError::not_found("session not found"))?;
+    state.metrics.job_submitted(&client, "replay");
     let key = resolved.key(&request.model);
 
     if let Some(job_id) = state.store.in_flight(&key) {
         info!(job = %job_id, "joined in-flight bundle job");
+        state.metrics.job_finished("replay", "cached");
         return Ok(axum::Json(json!({ "job_id": job_id })).into_response());
     }
 
@@ -156,12 +192,16 @@ async fn replay_bundle(
             Ok(Ok(current)) => {
                 if current == recorded {
                     info!(job = %cached_id, "bundle cache hit");
+                    state.metrics.job_finished("replay", "cached");
                     return Ok(axum::Json(json!({ "job_id": cached_id })).into_response());
                 }
                 info!(job = %cached_id, "bundle cache stale; shard listing changed");
                 prelisted = Some(current);
             }
-            Ok(Err(error)) => return Err(ApiError::internal(error)),
+            Ok(Err(error)) => {
+                state.metrics.s3_errors.inc();
+                return Err(ApiError::internal(error));
+            }
             Err(_) => warn!("shard listing for cache check timed out; scheduling a fresh job"),
         }
     }
@@ -202,11 +242,16 @@ struct PlanBody {
     toml: String,
 }
 
-async fn plan(State(state): State<Arc<AppState>>, body: Bytes) -> Result<Response, ApiError> {
+async fn plan(
+    State(state): State<Arc<AppState>>,
+    ClientAddr(client): ClientAddr,
+    body: Bytes,
+) -> Result<Response, ApiError> {
     let PlanBody { toml } = parse_json(&body)?;
     if toml.len() > MAX_TOML_BYTES {
         return Err(ApiError::bad_request("config too large"));
     }
+    state.metrics.job_submitted(&client, "plan");
     let sha = toml_sha256(&toml);
     if let Some(job_id) = state.store.cached_plan(&sha) {
         let job = state.store.job_dir(&job_id)?;
@@ -214,6 +259,7 @@ async fn plan(State(state): State<Arc<AppState>>, body: Bytes) -> Result<Respons
         match cached {
             Ok(bytes) => {
                 info!(job = %job_id, "plan cache hit");
+                state.metrics.job_finished("plan", "cached");
                 return Ok(([(CONTENT_TYPE, "application/json")], bytes).into_response());
             }
             Err(error) => warn!(job = %job_id, %error, "cached plan.json unreadable; replanning"),
@@ -225,12 +271,21 @@ async fn plan(State(state): State<Arc<AppState>>, body: Bytes) -> Result<Respons
     job_state.toml_sha256 = Some(sha.clone());
     job.write_state(&mut job_state)?;
     let worker_job = job.clone();
-    let result = tokio::task::spawn_blocking(move || run_plan_blocking(&worker_job, &toml))
-        .await
+    let metrics = &state.metrics;
+    let inflight = metrics.jobs_inflight.with_label_values(&["plan"]);
+    inflight.inc();
+    let started = Instant::now();
+    let result = tokio::task::spawn_blocking(move || run_plan_blocking(&worker_job, &toml)).await;
+    inflight.dec();
+    metrics
+        .plan_duration
+        .observe(started.elapsed().as_secs_f64());
+    let result = result
         .map_err(|error| ApiError::internal(anyhow::anyhow!("plan task panicked: {error}")))?;
     let response = match result {
         Ok(response) => response,
         Err(PlanFailure::Invalid(message)) => {
+            metrics.job_finished("plan", "error");
             job_state.state = "error".to_string();
             job_state.error = Some(message.clone());
             job.write_state(&mut job_state)?;
@@ -242,12 +297,14 @@ async fn plan(State(state): State<Arc<AppState>>, body: Bytes) -> Result<Respons
                 .into_response());
         }
         Err(PlanFailure::Internal(error)) => {
+            metrics.job_finished("plan", "error");
             job_state.state = "error".to_string();
             job_state.error = Some(format!("{error:#}"));
             job.write_state(&mut job_state)?;
             return Err(ApiError::internal(error));
         }
     };
+    metrics.job_finished("plan", "done");
     let body = serde_json::to_vec(&response).map_err(|error| ApiError::internal(error.into()))?;
     tokio::fs::write(job.path.join("plan.json"), &body)
         .await

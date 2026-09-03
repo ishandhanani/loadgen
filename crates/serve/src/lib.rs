@@ -20,11 +20,13 @@ pub mod bundle;
 pub mod creds;
 pub mod hours;
 pub mod jobs;
+pub mod metrics;
 pub mod plan;
 pub mod shards;
 
 pub use api::router;
 use jobs::JobStore;
+use metrics::Metrics;
 use shards::ShardSource;
 
 /// Tunables shared by the CLI and tests.
@@ -65,6 +67,7 @@ pub struct AppState {
     pub job_timeout: Duration,
     pub cache_list_timeout: Duration,
     pub creds_loaded: bool,
+    pub metrics: Metrics,
 }
 
 impl AppState {
@@ -97,6 +100,7 @@ impl AppState {
             job_timeout: limits.job_timeout,
             cache_list_timeout: limits.cache_list_timeout,
             creds_loaded,
+            metrics: Metrics::new(),
         }))
     }
 }

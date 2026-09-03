@@ -302,7 +302,8 @@ async fn health_plan_and_replay_bundle_flow() {
         .send()
         .await
         .unwrap();
-    assert_eq!(svg.status() == 200, plan["has_svg"] == json!(true));
+    let svg_status = svg.status().as_u16();
+    assert_eq!(svg_status == 200, plan["has_svg"] == json!(true));
 
     // schema-4 profiles get the actionable migration message.
     let response = client
@@ -495,6 +496,76 @@ async fn health_plan_and_replay_bundle_flow() {
     let fresh_job = wait_for_job(&client, &base, fresh["job_id"].as_str().unwrap()).await;
     assert_eq!(fresh_job["kept"], json!(4), "{fresh_job}");
     assert_eq!(fresh_job["shards"], json!(3));
+
+    // /metrics reflects the plan, cache hits, bundle jobs, and rejections above.
+    let response = client.get(format!("{base}/metrics")).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain")
+    );
+    let metrics = response.text().await.unwrap();
+    let has_line = |line: &str| metrics.lines().any(|candidate| candidate == line);
+    // Unknown session, unknown job, plus plan.svg when Graphviz is not installed.
+    let not_found = 2 + usize::from(svg_status == 404);
+    for line in [
+        // One real plan, one identical-TOML cache hit, one 422 (schema 4).
+        "loadgen_serve_jobs_total{kind=\"plan\",result=\"done\"} 1",
+        "loadgen_serve_jobs_total{kind=\"plan\",result=\"cached\"} 1",
+        "loadgen_serve_jobs_total{kind=\"plan\",result=\"error\"} 1",
+        // Tree, solo, and post-invalidation bundle jobs; one unchanged-shard cache hit.
+        "loadgen_serve_jobs_total{kind=\"replay\",result=\"done\"} 3",
+        "loadgen_serve_jobs_total{kind=\"replay\",result=\"cached\"} 1",
+        "loadgen_serve_jobs_total{kind=\"replay\",result=\"error\"} 0",
+        "loadgen_serve_jobs_inflight{kind=\"plan\"} 0",
+        "loadgen_serve_jobs_inflight{kind=\"replay\"} 0",
+        "loadgen_serve_jobs_queued 0",
+        "loadgen_serve_http_requests_total{method=\"POST\",route=\"/plan\",status=\"200\"} 2",
+        "loadgen_serve_http_requests_total{method=\"POST\",route=\"/plan\",status=\"400\"} 2",
+        "loadgen_serve_http_requests_total{method=\"POST\",route=\"/plan\",status=\"422\"} 1",
+        "loadgen_serve_http_requests_total{method=\"POST\",route=\"/replay-bundle\",status=\"404\"} 1",
+        "loadgen_serve_http_requests_total{method=\"GET\",route=\"/jobs/{id}/bundle\",status=\"200\"} 1",
+        "loadgen_serve_rejected_total{reason=\"bad_request\"} 3",
+        &format!("loadgen_serve_rejected_total{{reason=\"not_found\"}} {not_found}"),
+        "loadgen_serve_rejected_total{reason=\"per_ip_cap\"} 0",
+        "loadgen_serve_rejected_total{reason=\"too_many_hours\"} 0",
+        // 2 + 2 + 3 shards across the three completed jobs.
+        "loadgen_serve_shards_scanned_total 7",
+        // 6 + 6 + 7 lines; 3 + 2 + 4 kept records; one zero-output drop per job.
+        "loadgen_serve_lines_scanned_total 19",
+        "loadgen_serve_records_kept_total 9",
+        "loadgen_serve_zero_output_dropped_total 3",
+        "loadgen_serve_s3_errors_total 0",
+        "loadgen_serve_active_clients{window=\"15m\"} 1",
+        "loadgen_serve_active_clients{window=\"24h\"} 1",
+        // Two accepted plans (real + cached); the 422, 400s never reach acceptance.
+        "loadgen_serve_client_jobs_total{client=\"127.0.0.1\",kind=\"plan\"} 3",
+        "loadgen_serve_client_jobs_total{client=\"127.0.0.1\",kind=\"replay\"} 4",
+        &format!(
+            "loadgen_serve_build_info{{version=\"{}\"}} 1",
+            env!("CARGO_PKG_VERSION")
+        ),
+    ] {
+        assert!(
+            has_line(line),
+            "missing metric line {line:?} in:\n{metrics}"
+        );
+    }
+    let shard_bytes: u64 = metrics
+        .lines()
+        .find_map(|line| line.strip_prefix("loadgen_serve_shard_bytes_total "))
+        .and_then(|value| value.parse().ok())
+        .unwrap();
+    assert!(shard_bytes > 0, "{metrics}");
+    for histogram in [
+        "loadgen_serve_http_request_duration_seconds_count{route=\"/plan\"} 5",
+        "loadgen_serve_plan_duration_seconds_count 2",
+        "loadgen_serve_bundle_job_duration_seconds_count{result=\"done\"} 3",
+    ] {
+        assert!(has_line(histogram), "missing {histogram:?} in:\n{metrics}");
+    }
 }
 
 #[tokio::test]

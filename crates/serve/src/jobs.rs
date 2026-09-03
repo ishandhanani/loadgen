@@ -399,9 +399,12 @@ impl JobStore {
         index.queue.len()
     }
 
-    pub fn dequeue(&self, id: &str) {
+    /// Remove a job from the permit queue; returns whether it was waiting.
+    pub fn dequeue(&self, id: &str) -> bool {
         let mut index = self.index.lock().expect("job index poisoned");
+        let before = index.queue.len();
         index.queue.retain(|queued| queued != id);
+        index.queue.len() != before
     }
 
     /// Live 1-based queue position for a waiting job, or `None` if it is not waiting.
@@ -489,7 +492,8 @@ mod tests {
         assert!(in_flight == "j1" || in_flight == "j2");
         assert_eq!(store.enqueue("j1"), 1);
         assert_eq!(store.enqueue("j2"), 2);
-        store.dequeue("j1");
+        assert!(store.dequeue("j1"));
+        assert!(!store.dequeue("j1"));
         assert_eq!(store.queue_position("j2"), Some(1));
         store.finish("j1");
         store.finish("j2");

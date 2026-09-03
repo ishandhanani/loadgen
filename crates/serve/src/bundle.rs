@@ -206,7 +206,23 @@ pub struct ShardScan {
     pub scanned: u64,
     pub dropped_zero_output: u64,
     pub malformed: u64,
+    /// Compressed bytes read from the shard source.
+    pub compressed_bytes: u64,
     pub kept: Vec<KeptLine>,
+}
+
+/// `Read` adapter counting the bytes pulled from the underlying reader.
+struct CountingReader<R> {
+    inner: R,
+    bytes: u64,
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.bytes += read as u64;
+        Ok(read)
+    }
 }
 
 #[derive(Deserialize)]
@@ -274,7 +290,10 @@ pub fn scan_reader(
     matcher: &AhoCorasick,
     sessions: &HashSet<String>,
 ) -> Result<ShardScan> {
-    let mut lines = BufReader::new(MultiGzDecoder::new(BufReader::new(reader)));
+    let mut lines = BufReader::new(MultiGzDecoder::new(BufReader::new(CountingReader {
+        inner: reader,
+        bytes: 0,
+    })));
     let mut scan = ShardScan::default();
     let mut buffer = Vec::new();
     loop {
@@ -283,6 +302,7 @@ pub fn scan_reader(
             .read_until(b'\n', &mut buffer)
             .context("failed to read shard stream")?;
         if read == 0 {
+            scan.compressed_bytes = lines.get_ref().get_ref().get_ref().bytes;
             break;
         }
         while matches!(buffer.last(), Some(b'\n' | b'\r')) {
@@ -493,6 +513,11 @@ pub async fn run_bundle_job(app: Arc<AppState>, work: BundleJob) {
     let started = Instant::now();
     let outcome =
         tokio::time::timeout(app.job_timeout, execute_bundle_job(&app, &work, &mut state)).await;
+    let result = if matches!(outcome, Ok(Ok(()))) {
+        "done"
+    } else {
+        "error"
+    };
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
@@ -509,11 +534,25 @@ pub async fn run_bundle_job(app: Arc<AppState>, work: BundleJob) {
         }
     }
     state.queue_position = Some(0);
-    state.elapsed_ms = Some(started.elapsed().as_millis() as u64);
+    let elapsed = started.elapsed();
+    state.elapsed_ms = Some(elapsed.as_millis() as u64);
     if let Err(error) = job.write_state(&mut state) {
         tracing::error!(job = %job.id, %error, "failed to persist final job state");
     }
-    app.store.dequeue(&job.id);
+    // A job still in the permit queue never became "running".
+    if app.store.dequeue(&job.id) {
+        app.metrics.jobs_queued.dec();
+    } else {
+        app.metrics
+            .jobs_inflight
+            .with_label_values(&["replay"])
+            .dec();
+    }
+    app.metrics.job_finished("replay", result);
+    app.metrics
+        .bundle_job_duration
+        .with_label_values(&[result])
+        .observe(elapsed.as_secs_f64());
     app.store.finish(&job.id);
     app.store.prune();
 }
@@ -528,6 +567,7 @@ async fn execute_bundle_job(
     let resolved = &work.resolved;
 
     state.queue_position = Some(app.store.enqueue(&job.id));
+    app.metrics.jobs_queued.inc();
     state.sessions = Some(resolved.sessions.clone());
     state.agent = Some(resolved.agent.clone());
     state.harness = Some(resolved.harness.clone());
@@ -540,7 +580,13 @@ async fn execute_bundle_job(
         .acquire_owned()
         .await
         .context("bundle semaphore closed")?;
-    app.store.dequeue(&job.id);
+    if app.store.dequeue(&job.id) {
+        app.metrics.jobs_queued.dec();
+    }
+    app.metrics
+        .jobs_inflight
+        .with_label_values(&["replay"])
+        .inc();
     state.state = "running".to_string();
     state.queue_position = Some(0);
     state.step = Some("resolving sessions".to_string());
@@ -567,7 +613,9 @@ async fn execute_bundle_job(
     job.write_state(state)?;
     let shards = match &work.prelisted {
         Some(shards) => shards.clone(),
-        None => list_model_shards(app.shards.as_ref(), &request.model, &resolved.hours).await?,
+        None => list_model_shards(app.shards.as_ref(), &request.model, &resolved.hours)
+            .await
+            .inspect_err(|_| app.metrics.s3_errors.inc())?,
     };
     job.append_log(&format!("{} shard(s) to scan", shards.len()));
     if shards.is_empty() {
@@ -600,7 +648,10 @@ async fn execute_bundle_job(
         let mut stream = futures_util::stream::iter(scans_pending)
             .buffer_unordered(SHARD_FANOUT.min(shards.len()));
         while let Some(scan) = stream.next().await {
-            let scan = scan?;
+            let scan = scan.inspect_err(|_| app.metrics.s3_errors.inc())?;
+            app.metrics.shards_scanned.inc();
+            app.metrics.shard_bytes.inc_by(scan.compressed_bytes);
+            app.metrics.lines_scanned.inc_by(scan.scanned);
             running_kept += scan.kept.len() as u64;
             scans.push(scan);
             if let Some(progress) = state.progress.as_mut() {
@@ -616,6 +667,10 @@ async fn execute_bundle_job(
         }
     }
     let merged = merge_scans(scans);
+    app.metrics.records_kept.inc_by(merged.lines.len() as u64);
+    app.metrics
+        .zero_output_dropped
+        .inc_by(merged.dropped_zero_output);
     job.append_log(&format!(
         "scanned={} kept={} dropped_zero_output={} deduplicated={} malformed={} block_sizes={:?} in {} ms",
         merged.scanned,
@@ -788,6 +843,7 @@ mod tests {
         let (matcher, sessions) = matcher_for(&["sess-a"]);
         let scan = scan_reader(&bytes[..], &matcher, &sessions).unwrap();
         assert_eq!(scan.scanned, 8);
+        assert_eq!(scan.compressed_bytes, bytes.len() as u64);
         assert_eq!(scan.dropped_zero_output, 1);
         assert_eq!(
             scan.malformed, 1,
