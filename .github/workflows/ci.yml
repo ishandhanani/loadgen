@@ -13,14 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # The organization allows only listed actions; this ref is on the list.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           components: clippy,rustfmt
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check warnings
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --workspace --all-targets
