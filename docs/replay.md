@@ -84,7 +84,7 @@ target/release/agent-loadgen replay trace.jsonl.gz \
   --tokenizer /models/GLM-4.7-Flash
 ```
 
-`--headers` selects the wire header dialect and defaults to `dynamo`, which sends only `x-dynamo-session-id`, `x-dynamo-parent-session-id`, and `x-dynamo-session-final` on the last request of each captured session. `claude-code`, `codex`, and `opencode` add that harness's session and child headers on top; `codex` also labels compaction attempts with `x-codex-turn-metadata`. The dialect does not change which requests are sent or when.
+`--headers {claude-code|codex}` is required and selects the harness whose session, subagent, and compaction headers each request carries. `--dynamo-session-final` additionally marks the last request of each captured session with `x-dynamo-session-final: true`. The dialect does not change which requests are sent or when.
 
 `inspect` reports root count and dependency-edge count in addition to shape statistics. `run.json` labels captured runs with `scheduling_model: agentic_causal` and records the `header_dialect`.
 

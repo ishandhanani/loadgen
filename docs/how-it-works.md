@@ -28,7 +28,7 @@ Both modes use the same request and result path:
 
 1. Convert trace hashes or generated block labels into deterministic token IDs.
 2. Send the IDs through `nvext.token_data` with valid dummy Chat Completions messages.
-3. Add the generic Dynamo session headers (`x-dynamo-session-id`, `x-dynamo-parent-session-id`, and `x-dynamo-session-final` on a session's last request), plus the harness headers of the `--headers` dialect when one other than `dynamo` is selected.
+3. Add the harness session, subagent, and compaction headers of the `--headers` dialect, plus `x-dynamo-session-final` on a session's last request when `--dynamo-session-final` is set.
 4. Stream the response and record TTFT, completion usage, status, and selected Dynamo headers.
 5. Append the result to `requests.jsonl` and update bounded timing histograms.
 

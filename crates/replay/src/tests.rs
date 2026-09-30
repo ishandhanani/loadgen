@@ -163,6 +163,7 @@ async fn replay_sends_shape_and_agent_headers() {
         dictionary,
         ReplayOptions {
             header_dialect: HeaderDialect::Codex,
+            dynamo_session_final: true,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -189,7 +190,7 @@ async fn replay_sends_shape_and_agent_headers() {
     assert!(summary.total_time_ms >= 5.0);
     let (headers, body) = capture.0.lock().unwrap().clone().unwrap();
     assert_eq!(headers.get("thread-id").unwrap(), "thread-1");
-    assert_eq!(headers.get("x-dynamo-session-id").unwrap(), "thread-1");
+    assert!(headers.get("x-dynamo-session-id").is_none());
     assert_eq!(headers.get("x-dynamo-session-final").unwrap(), "true");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
@@ -289,6 +290,7 @@ async fn recorded_scheduler_handles_tied_millisecond_arrivals() {
         dictionary,
         ReplayOptions {
             header_dialect: HeaderDialect::Codex,
+            dynamo_session_final: true,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -395,6 +397,7 @@ async fn captured_successor_waits_for_actual_completion_plus_recorded_gap() {
         dictionary,
         ReplayOptions {
             header_dialect: HeaderDialect::Codex,
+            dynamo_session_final: true,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -483,6 +486,7 @@ async fn generated_graph_releases_tool_successor_after_completion() {
         dictionary,
         ReplayOptions {
             header_dialect: HeaderDialect::Codex,
+            dynamo_session_final: true,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -515,7 +519,7 @@ async fn generated_graph_releases_tool_successor_after_completion() {
     let (headers, _) = capture.0.lock().unwrap().clone().unwrap();
     assert_eq!(headers.get("x-dynamo-session-final").unwrap(), "true");
     assert_eq!(
-        headers.get("x-dynamo-session-id").unwrap(),
+        headers.get("thread-id").unwrap(),
         scenario.sessions[0].session_id.as_str()
     );
     server.abort();

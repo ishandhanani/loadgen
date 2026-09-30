@@ -9,7 +9,7 @@ It supports two workload modes:
 
 Prompt text is synthetic. The fidelity contract is request shape, KV reuse, agent lineage, and timing.
 
-Traffic shape and wire protocol are separate. The trace or profile defines shape. `--headers {dynamo|claude-code|codex|opencode}` on `replay` and `generate` selects the request header dialect: `dynamo` (the default) sends only the generic Dynamo session headers, and a harness dialect adds that harness's session, child, and compaction headers on top. See [Generator defaults](docs/presets.md#header-dialects).
+Traffic shape and wire protocol are separate. The trace or profile defines shape. The required `--headers {claude-code|codex}` flag on `replay` and `generate` selects which harness the requests look like: each dialect sends only that harness's own session, subagent, and compaction headers, and Dynamo derives session identity from them. See [Generator defaults](docs/presets.md#header-dialects).
 
 ## Build
 

@@ -2,9 +2,9 @@
 
 This page records every default resolved by generator schema version 5. A profile only needs `schema_version`; omitted fields inherit these values. `scenario.json.config` is always the authoritative resolved configuration for a particular plan.
 
-There is one neutral default set and no per-agent preset. Traffic shape comes only from the profile. The coding-agent harness is a wire concern: `--headers {dynamo|claude-code|codex|opencode}` on `generate` and `replay` selects which harness headers are layered on top of the generic Dynamo session headers, and it never changes the plan. See [Header dialects](#header-dialects).
+There is one neutral default set and no per-agent preset. Traffic shape comes only from the profile. The coding-agent harness is a wire concern: the required `--headers {claude-code|codex}` flag on `generate` and `replay` selects which harness's headers each request carries, and it never changes the plan. See [Header dialects](#header-dialects).
 
-The defaults are starting points for repeatable simulation, not claims that any Claude Code, Codex, or OpenCode deployment has these exact distributions. Values fall into three broad categories:
+The defaults are starting points for repeatable simulation, not claims that any Claude Code or Codex deployment has these exact distributions. Values fall into three broad categories:
 
 - Synthetic baseline: plausible traffic geometry chosen to exercise the load generator before workload-specific calibration.
 - Stress-oriented: deliberately more aggressive than a native default so short runs cover compaction, recursion, or failures.
@@ -133,12 +133,10 @@ The dialect is a run-time flag, recorded in `run.json` as `header_dialect`, and 
 
 | Dialect | Headers on every request | Extra child-session headers | Compaction label |
 |---|---|---|---|
-| `dynamo` (default) | `x-dynamo-session-id`, `x-dynamo-session-final` on the last request of a session | `x-dynamo-parent-session-id` | none |
-| `claude-code` | generic set plus `x-claude-code-session-id` | `x-claude-code-agent-id`, `x-claude-code-parent-agent-id`; `x-claude-code-session-id` carries the parent | none |
-| `codex` | generic set plus `thread-id` | `x-codex-parent-thread-id` | `x-codex-turn-metadata` on compaction attempts |
-| `opencode` | generic set plus `x-session-id` | `x-parent-session-id` | none |
+| `claude-code` | `x-claude-code-session-id` | `x-claude-code-agent-id`, `x-claude-code-parent-agent-id` | none |
+| `codex` | `thread-id` | `x-codex-parent-thread-id` | `x-codex-turn-metadata` on compaction attempts |
 
-Compaction is labeled on the wire only in the `codex` dialect because Dynamo parses compaction metadata only from `x-codex-turn-metadata`. Every plan still models compaction; the other dialects simply send the attempt as an ordinary same-session request. All of these header names are reserved in every dialect and cannot be supplied through `--header`.
+Neither dialect sends `x-dynamo-session-id`; Dynamo maps the harness headers to its session identity itself. `--dynamo-session-final` adds `x-dynamo-session-final: true` to the last request of each session for deployments that consume that Dynamo extension; no harness sends it. All of these header names are reserved and cannot be supplied through `--header`.
 
 ## Checked-in profiles
 
