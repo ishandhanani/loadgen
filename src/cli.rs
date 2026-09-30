@@ -91,6 +91,48 @@ pub struct FidelityArgs {
     pub engine_cache_mode: Vec<String>,
 }
 
+#[derive(Debug, Args)]
+pub struct RunOutputArgs {
+    /// Width in seconds of each timeline.csv row.
+    #[arg(long, default_value_t = 60.0)]
+    pub timeline_seconds: f64,
+
+    /// Mix this value into token content so the run does not reuse KV cached by
+    /// earlier runs. Defaults to a random value; 0 sends the planned content.
+    #[arg(long)]
+    pub token_salt: Option<u64>,
+
+    /// Stop sending after this many minutes, let in-flight requests finish, and
+    /// report the requests that were sent.
+    #[arg(long)]
+    pub stop_after_minutes: Option<f64>,
+}
+
+impl RunOutputArgs {
+    pub fn timeline_bucket(&self) -> Result<std::time::Duration> {
+        if !self.timeline_seconds.is_finite() || self.timeline_seconds <= 0.0 {
+            bail!("--timeline-seconds must be a positive number");
+        }
+        Ok(std::time::Duration::from_secs_f64(self.timeline_seconds))
+    }
+
+    pub fn stop_after(&self) -> Result<Option<std::time::Duration>> {
+        self.stop_after_minutes
+            .map(|minutes| {
+                if !minutes.is_finite() || minutes <= 0.0 {
+                    bail!("--stop-after-minutes must be a positive number");
+                }
+                Ok(std::time::Duration::from_secs_f64(minutes * 60.0))
+            })
+            .transpose()
+    }
+
+    pub fn token_salt(&self) -> u64 {
+        self.token_salt
+            .unwrap_or_else(|| uuid::Uuid::new_v4().as_u64_pair().0)
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Validate and summarize an agentic trace and its causal graph.
@@ -181,20 +223,24 @@ pub enum Command {
         /// Add a static target header as NAME=VALUE. Repeat the flag for more headers.
         #[arg(long = "header")]
         static_headers: Vec<String>,
+
+        #[command(flatten)]
+        run: RunOutputArgs,
     },
 
-    /// Generate a deterministic scenario without sending traffic.
+    /// Summarize a profile's traffic, and its request graph when small, without sending it.
     Plan {
         /// Versioned TOML generator config.
         #[arg(long)]
         config: PathBuf,
 
-        /// Output directory for scenario.json, plan.dot, and optional plan.svg.
+        /// Output directory for plan-summary.json and, when the plan fits one
+        /// graph, scenario.json, plan.dot, and optional plan.svg.
         #[arg(long)]
         output: PathBuf,
     },
 
-    /// Generate and run seeded coding-agent trajectories.
+    /// Generate and run seeded coding-agent traffic, planning each session tree when it starts.
     Generate {
         /// Versioned TOML generator config.
         #[arg(long)]
@@ -217,7 +263,8 @@ pub enum Command {
         #[arg(long)]
         target: String,
 
-        /// Output directory for scenario.json, plan.dot, optional plan.svg, run.json, and requests.jsonl.
+        /// Output directory for plan and run artifacts: plan-summary.json, run.json,
+        /// requests.jsonl, timeline.csv, and, for small plans, scenario.json and plan.dot.
         #[arg(long)]
         output: PathBuf,
 
@@ -266,6 +313,9 @@ pub enum Command {
         /// Add a static target header as NAME=VALUE. Repeat the flag for more headers.
         #[arg(long = "header")]
         static_headers: Vec<String>,
+
+        #[command(flatten)]
+        run: RunOutputArgs,
     },
 
     /// Compare a source trace with a trace captured during replay.

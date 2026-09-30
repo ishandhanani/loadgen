@@ -316,7 +316,7 @@ fn tool_durations(tools: &[(String, u64)]) -> Option<String> {
 }
 
 /// A random-format UUID derived from stable request identity.
-fn stable_uuid(parts: &[&str]) -> String {
+pub(crate) fn stable_uuid(parts: &[&str]) -> String {
     let mut digest = Sha256::new();
     digest.update(b"agent-loadgen/harness-id/v1");
     for part in parts {

@@ -321,6 +321,8 @@ pub struct TokenDictionary {
     block_size: usize,
     alphabet: SafeTokenAlphabet,
     manifest: TokenDictionaryManifest,
+    salt: u64,
+    unsalted_prefix_blocks: usize,
 }
 
 impl TokenDictionary {
@@ -349,7 +351,20 @@ impl TokenDictionary {
             block_size,
             alphabet,
             manifest,
+            salt: 0,
+            unsalted_prefix_blocks: 0,
         })
+    }
+
+    /// Mix `salt` into every block after the first `unsalted_prefix_blocks`.
+    ///
+    /// Prefix reuse inside a run is unchanged, but a run no longer reuses KV
+    /// cached by an earlier run. The unsalted prefix, such as a generated
+    /// system prompt, stays identical across runs. A zero salt changes nothing.
+    pub fn with_salt(mut self, salt: u64, unsalted_prefix_blocks: usize) -> Self {
+        self.salt = salt;
+        self.unsalted_prefix_blocks = unsalted_prefix_blocks;
+        self
     }
 
     #[cfg(test)]
@@ -381,8 +396,13 @@ impl TokenDictionary {
             bail!("request block size does not match the token dictionary");
         }
         let mut tokens = Vec::with_capacity(request.input_tokens);
-        for hash in &request.input_sequence_hashes {
-            let codeword = make_codeword(*hash, self.block_size, &self.alphabet);
+        for (index, hash) in request.input_sequence_hashes.iter().enumerate() {
+            let hash = if index < self.unsalted_prefix_blocks {
+                *hash
+            } else {
+                hash ^ self.salt
+            };
+            let codeword = make_codeword(hash, self.block_size, &self.alphabet);
             let remaining = request.input_tokens - tokens.len();
             tokens.extend_from_slice(&codeword[..remaining.min(self.block_size)]);
             if tokens.len() == request.input_tokens {
@@ -480,6 +500,25 @@ mod tests {
         assert_eq!(second_tokens.len(), 8);
         assert_eq!(&first_tokens[..4], &second_tokens[..4]);
         assert_ne!(&first_tokens[4..], &second_tokens[4..6]);
+    }
+
+    #[test]
+    fn salt_changes_content_after_the_unsalted_prefix_only() {
+        let first = request("a", 12, &[11, 22, 33]);
+        let second = request("b", 12, &[11, 22, 44]);
+        let plain = TokenDictionary::build(&[first.clone(), second.clone()], alphabet()).unwrap();
+        let salted = plain.clone().with_salt(0x5eed, 1);
+        let plain_first = plain.synthesize(&first).unwrap();
+        let salted_first = salted.synthesize(&first).unwrap();
+        let salted_second = salted.synthesize(&second).unwrap();
+        assert_eq!(&plain_first[..4], &salted_first[..4]);
+        assert_ne!(&plain_first[4..], &salted_first[4..]);
+        assert_eq!(&salted_first[..8], &salted_second[..8]);
+        assert_ne!(&salted_first[8..], &salted_second[8..]);
+        assert_eq!(
+            plain.clone().with_salt(0, 0).synthesize(&first).unwrap(),
+            plain_first
+        );
     }
 
     #[test]

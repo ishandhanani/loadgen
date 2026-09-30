@@ -25,7 +25,7 @@ pub mod telemetry;
 pub mod token_shape;
 
 pub use captured::run_agentic_replay;
-pub use generated::run_generated_scenario;
+pub use generated::run_generated;
 
 pub use agent_loadgen_core::Percentiles;
 
@@ -62,6 +62,13 @@ pub struct ReplayOptions {
     pub token_path_verified: bool,
     pub engine_cache_mode: BTreeMap<String, String>,
     pub static_headers: Vec<(String, String)>,
+    /// Width of each `timeline.csv` bucket.
+    pub timeline_bucket: Duration,
+    /// Mixed into generated token content so runs do not share cached KV.
+    /// Zero keeps the planned token content.
+    pub token_salt: u64,
+    /// Stop dispatching after this long, wait for in-flight requests, and end.
+    pub stop_after: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -135,10 +142,27 @@ pub struct RunSummary {
     pub scheduler_wake_lag_ms: Percentiles,
     pub dispatch_lag_ms: Percentiles,
     pub local_admission_lag_ms: Percentiles,
+    pub performance: Performance,
+    pub timeline_bucket_seconds: f64,
+    /// The run reached `stop_after` before sending every planned request.
+    pub stopped_early: bool,
     pub request_fidelity_matches: bool,
     pub dispatch_timing_matches: bool,
     pub passed: bool,
     pub total_time_ms: f64,
+}
+
+/// Target performance observed by the client over the whole run.
+#[derive(Debug, Clone, Serialize)]
+pub struct Performance {
+    pub requests_per_second: f64,
+    pub input_tokens_per_second: f64,
+    pub output_tokens_per_second: f64,
+    /// Time to the first streamed output token.
+    pub ttft_ms: Percentiles,
+    pub request_latency_ms: Percentiles,
+    /// Mean time per output token after the first, per request.
+    pub tpot_ms: Percentiles,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Shared closed-loop execution for captured and generated agent graphs.
+//!
+//! A workload is a sequence of chunks. Each chunk is a request DAG with
+//! chunk-local dependencies. A chunk starts either at a scheduled offset or a
+//! delay after its predecessor's anchor request completes. Chunks are loaded
+//! shortly before they start and dropped when their last request completes,
+//! so a long run holds only the chunks that are live.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,77 +22,59 @@ use super::{PreparedRequest, ReplayContext, ReplayOptions, RequestResult, durati
 use crate::clock::sleep_until;
 use agent_loadgen_core::scheduler::ReadyQueue;
 
-/// A preplanned request DAG that can be executed by the common causal loop.
-///
-/// Workload implementations keep their own request-shape and artifact details;
-/// this interface contains only readiness and request-preparation behavior.
+/// Load a chunk this long before it starts, so planning never delays dispatch.
+const LOAD_AHEAD: Duration = Duration::from_secs(2);
+
+/// One request DAG admitted as a unit.
+pub(crate) struct Chunk<P> {
+    pub(crate) nodes: Vec<ChunkNode>,
+    /// Completing this node starts the chunk's successor, if the workload has one.
+    pub(crate) anchor: Option<usize>,
+    pub(crate) payload: P,
+}
+
+pub(crate) struct ChunkNode {
+    pub(crate) dependencies: Vec<usize>,
+    /// Offset from the chunk start; set exactly for nodes without dependencies.
+    pub(crate) start_offset_ms: Option<u64>,
+    pub(crate) delay_after_dependencies_ms: u64,
+}
+
 pub(crate) trait CausalWorkload {
-    fn node_count(&self) -> usize;
-    fn dependencies(&self, ordinal: usize) -> &[usize];
-    fn initial_arrival_ms(&self, ordinal: usize) -> Option<u64>;
-    fn delay_after_dependencies_ms(&self, ordinal: usize) -> u64;
-    fn prepare(&self, ordinal: usize) -> Result<PreparedRequest>;
+    type Payload;
+
     fn name(&self) -> &'static str;
+    /// The next chunk with a known start offset, in nondecreasing start order.
+    fn next_scheduled(&mut self) -> Result<Option<(u64, usize)>>;
+    /// The chunk that starts after `chunk`'s anchor completes, with its delay.
+    fn successor(&mut self, chunk: usize) -> Result<Option<(u64, usize)>>;
+    fn load(&mut self, chunk: usize) -> Result<Chunk<Self::Payload>>;
+    /// Build one node's request. `ordinal` is unique within the run.
+    fn prepare(
+        &self,
+        payload: &Self::Payload,
+        node: usize,
+        ordinal: usize,
+    ) -> Result<PreparedRequest>;
+    /// No chunk starts at or after this offset.
+    fn start_deadline_ms(&self) -> Option<u64> {
+        None
+    }
 }
 
 pub(crate) struct CausalExecution {
     pub(crate) accumulator: RunAccumulator,
     pub(crate) elapsed: Duration,
+    /// `stop_after` ended the run with planned requests unsent.
+    pub(crate) stopped_early: bool,
 }
 
 pub(crate) async fn execute_causally<W: CausalWorkload>(
-    workload: &W,
+    workload: &mut W,
     client: reqwest::Client,
     target: &str,
     options: &ReplayOptions,
 ) -> Result<CausalExecution> {
-    let node_count = workload.node_count();
-    let mut prepared = std::iter::repeat_with(|| None)
-        .take(node_count)
-        .collect::<Vec<_>>();
-    let remaining_dependencies = (0..node_count)
-        .map(|ordinal| workload.dependencies(ordinal).len())
-        .collect::<Vec<_>>();
-    let mut successors = vec![Vec::new(); node_count];
-    for ordinal in 0..node_count {
-        for dependency in workload.dependencies(ordinal) {
-            successors
-                .get_mut(*dependency)
-                .with_context(|| {
-                    format!(
-                        "{} node {ordinal} has missing dependency {dependency}",
-                        workload.name()
-                    )
-                })?
-                .push(ordinal);
-        }
-    }
-
-    let mut ready = ReadyQueue::with_capacity(node_count);
-    for (ordinal, slot) in prepared.iter_mut().enumerate() {
-        let dependencies = workload.dependencies(ordinal);
-        let initial_arrival_ms = workload.initial_arrival_ms(ordinal);
-        if dependencies.is_empty() {
-            let initial_arrival_ms = initial_arrival_ms.with_context(|| {
-                format!(
-                    "{} root node {ordinal} has no initial arrival",
-                    workload.name()
-                )
-            })?;
-            *slot = Some(workload.prepare(ordinal)?);
-            ready.push(
-                scaled_offset_ns(initial_arrival_ms, options.time_scale)?,
-                ordinal,
-                ordinal,
-            );
-        } else if initial_arrival_ms.is_some() {
-            bail!(
-                "{} dependent node {ordinal} also has an initial arrival",
-                workload.name()
-            );
-        }
-    }
-
     warm_connections(&client, target, options).await?;
     let wall_started = Instant::now();
     let base = wall_started
@@ -94,48 +83,55 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
     let context = ReplayContext { client, base };
     let semaphore = Arc::new(Semaphore::new(options.max_in_flight));
     let mut tasks = JoinSet::new();
-    let mut scheduler = CausalSchedulerState {
+    let mut scheduler = Scheduler {
         workload,
-        prepared,
-        successors,
-        remaining_dependencies,
-        dependency_completion_ns: vec![0; node_count],
-        ready,
+        live: HashMap::new(),
+        loaded_nodes: 0,
+        next_scheduled: None,
+        scheduled_exhausted: false,
+        pending_starts: ReadyQueue::with_capacity(0),
+        ready: ReadyQueue::with_capacity(0),
         sink: ResultSink::create(
             &options.output_dir.join("requests.jsonl"),
             options.result_flush_interval,
             options.max_dispatch_p99_ms,
+            options.timeline_bucket,
         )?,
         base,
         time_scale: options.time_scale,
+        start_deadline_ns: None,
+        stopped: false,
     };
+    scheduler.start_deadline_ns = scheduler
+        .workload
+        .start_deadline_ms()
+        .map(|ms| scaled_offset_ns(ms, options.time_scale))
+        .transpose()?;
+    let load_ahead_ns = duration_ns(LOAD_AHEAD);
+    let stop_ns = options.stop_after.map(duration_ns);
+    let mut stopped_early = false;
 
-    while !scheduler.ready.is_empty() || !tasks.is_empty() {
-        if let Some(next_ready_ns) = scheduler.ready.next_ready_at_ns() {
-            let deadline = base
-                .checked_add(Duration::from_nanos(next_ready_ns))
-                .context("a causal replay timestamp exceeds the monotonic clock range")?;
-            if Instant::now() < deadline {
-                if tasks.is_empty() {
-                    sleep_until(deadline).await;
-                } else {
-                    tokio::select! {
-                        () = sleep_until(deadline) => {},
-                        result = tasks.join_next() => {
-                            if let Some(result) = result {
-                                scheduler.release(
-                                    result.context("a causal replay request task failed")??,
-                                )?;
-                                continue;
-                            }
-                        }
-                    }
-                }
-            }
-            let now_ns = duration_ns(Instant::now().saturating_duration_since(base));
-            for item in scheduler.ready.pop_due(now_ns, usize::MAX) {
-                let ordinal = item.value;
-                let request = scheduler.take_request(ordinal)?;
+    loop {
+        let now = Instant::now();
+        let now_ns = duration_ns(now.saturating_duration_since(base));
+        if !stopped_early && stop_ns.is_some_and(|stop_ns| now_ns >= stop_ns) {
+            // Send nothing more; the loop ends once in-flight requests finish.
+            scheduler.stop();
+            stopped_early = true;
+        }
+        if !stopped_early {
+            scheduler.admit(now_ns.saturating_add(load_ahead_ns))?;
+        }
+        // Nothing is due before the start delay has elapsed.
+        let due = if now >= base {
+            scheduler.ready.pop_due(now_ns, usize::MAX)
+        } else {
+            Vec::new()
+        };
+        if !due.is_empty() {
+            for item in due {
+                let (chunk, node) = item.value;
+                let request = scheduler.take_request(chunk, node)?;
                 let scheduled = base
                     .checked_add(Duration::from_nanos(item.ready_at_ns))
                     .context("a causal replay timestamp exceeds the monotonic clock range")?;
@@ -156,112 +152,273 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
                         permit,
                     )
                     .await?;
-                    Ok::<_, anyhow::Error>((ordinal, Instant::now(), result))
+                    Ok::<_, anyhow::Error>((chunk, node, Instant::now(), result))
                 });
             }
-        } else if let Some(result) = tasks.join_next().await {
-            scheduler.release(result.context("a causal replay request task failed")??)?;
+            continue;
+        }
+        let next_wake_ns = [
+            stop_ns.filter(|_| !stopped_early),
+            scheduler.ready.next_ready_at_ns(),
+            scheduler
+                .pending_starts
+                .next_ready_at_ns()
+                .map(|ns| ns.saturating_sub(load_ahead_ns)),
+            scheduler
+                .next_scheduled
+                .map(|(ns, _)| ns.saturating_sub(load_ahead_ns)),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        match next_wake_ns {
+            None if tasks.is_empty() => break,
+            None => {
+                let result = tasks.join_next().await.expect("tasks are not empty");
+                scheduler.release(result.context("a causal replay request task failed")??)?;
+            }
+            Some(wake_ns) => {
+                let deadline = base
+                    .checked_add(Duration::from_nanos(wake_ns))
+                    .context("a causal replay timestamp exceeds the monotonic clock range")?;
+                if tasks.is_empty() {
+                    sleep_until(deadline).await;
+                } else {
+                    tokio::select! {
+                        () = sleep_until(deadline) => {},
+                        result = tasks.join_next() => {
+                            if let Some(result) = result {
+                                scheduler.release(
+                                    result.context("a causal replay request task failed")??,
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
     scheduler.sink.flush()?;
-    if scheduler.sink.accumulator.request_count != node_count {
+    if !stopped_early && !scheduler.live.is_empty() {
         bail!(
-            "{} graph stalled after {} of {node_count} requests",
-            workload.name(),
+            "{} graph stalled after {} of {} loaded requests",
+            scheduler.workload.name(),
             scheduler.sink.accumulator.request_count,
+            scheduler.loaded_nodes,
         );
     }
     Ok(CausalExecution {
         accumulator: scheduler.sink.accumulator,
         elapsed: wall_started.elapsed(),
+        stopped_early,
     })
 }
 
-struct CausalSchedulerState<'a, W> {
-    workload: &'a W,
-    prepared: Vec<Option<PreparedRequest>>,
-    successors: Vec<Vec<usize>>,
+struct LiveChunk<P> {
+    chunk: Chunk<P>,
+    base_ordinal: usize,
     remaining_dependencies: Vec<usize>,
     dependency_completion_ns: Vec<u64>,
-    ready: ReadyQueue<usize>,
+    successors: Vec<Vec<usize>>,
+    prepared: Vec<Option<PreparedRequest>>,
+    outstanding: usize,
+}
+
+struct Scheduler<'a, W: CausalWorkload> {
+    workload: &'a mut W,
+    live: HashMap<usize, LiveChunk<W::Payload>>,
+    loaded_nodes: usize,
+    /// The workload's next scheduled chunk, peeked before it is due.
+    next_scheduled: Option<(u64, usize)>,
+    scheduled_exhausted: bool,
+    /// Successor chunks with a known start that are not loaded yet.
+    pending_starts: ReadyQueue<usize>,
+    ready: ReadyQueue<(usize, usize)>,
     sink: ResultSink,
     base: Instant,
     time_scale: f64,
+    start_deadline_ns: Option<u64>,
+    /// After `stop_after`, completions record results but release nothing.
+    stopped: bool,
 }
 
-impl<W: CausalWorkload> CausalSchedulerState<'_, W> {
-    fn take_request(&mut self, ordinal: usize) -> Result<PreparedRequest> {
-        self.prepared
-            .get_mut(ordinal)
+impl<W: CausalWorkload> Scheduler<'_, W> {
+    /// Drop every request not yet dispatched; in-flight requests still finish.
+    fn stop(&mut self) {
+        self.ready = ReadyQueue::with_capacity(0);
+        self.pending_starts = ReadyQueue::with_capacity(0);
+        self.next_scheduled = None;
+        self.scheduled_exhausted = true;
+        self.stopped = true;
+    }
+
+    /// Load every chunk that starts at or before `horizon_ns`.
+    fn admit(&mut self, horizon_ns: u64) -> Result<()> {
+        loop {
+            if self.next_scheduled.is_none() && !self.scheduled_exhausted {
+                match self.workload.next_scheduled()? {
+                    Some((start_ms, chunk)) => {
+                        let start_ns = scaled_offset_ns(start_ms, self.time_scale)?;
+                        if self
+                            .start_deadline_ns
+                            .is_some_and(|deadline| start_ns >= deadline)
+                        {
+                            self.scheduled_exhausted = true;
+                        } else {
+                            self.next_scheduled = Some((start_ns, chunk));
+                        }
+                    }
+                    None => self.scheduled_exhausted = true,
+                }
+            }
+            match self.next_scheduled {
+                Some((start_ns, chunk)) if start_ns <= horizon_ns => {
+                    self.next_scheduled = None;
+                    self.start_chunk(chunk, start_ns)?;
+                }
+                _ => break,
+            }
+        }
+        for item in self.pending_starts.pop_due(horizon_ns, usize::MAX) {
+            self.start_chunk(item.value, item.ready_at_ns)?;
+        }
+        Ok(())
+    }
+
+    fn start_chunk(&mut self, id: usize, start_ns: u64) -> Result<()> {
+        let chunk = self.workload.load(id)?;
+        let count = chunk.nodes.len();
+        if count == 0 {
+            bail!("{} chunk {id} has no requests", self.workload.name());
+        }
+        let base_ordinal = self.loaded_nodes;
+        self.loaded_nodes += count;
+        let mut successors = vec![Vec::new(); count];
+        let mut roots = Vec::new();
+        for (node, spec) in chunk.nodes.iter().enumerate() {
+            for dependency in &spec.dependencies {
+                if *dependency >= node {
+                    bail!(
+                        "{} chunk {id} node {node} depends on a later node {dependency}",
+                        self.workload.name()
+                    );
+                }
+                successors[*dependency].push(node);
+            }
+            match (spec.dependencies.is_empty(), spec.start_offset_ms) {
+                (true, Some(offset_ms)) => roots.push((node, offset_ms)),
+                (true, None) => bail!(
+                    "{} chunk {id} root node {node} has no start offset",
+                    self.workload.name()
+                ),
+                (false, Some(_)) => bail!(
+                    "{} chunk {id} dependent node {node} also has a start offset",
+                    self.workload.name()
+                ),
+                (false, None) => {}
+            }
+        }
+        let mut live = LiveChunk {
+            remaining_dependencies: chunk
+                .nodes
+                .iter()
+                .map(|node| node.dependencies.len())
+                .collect(),
+            dependency_completion_ns: vec![0; count],
+            successors,
+            prepared: std::iter::repeat_with(|| None).take(count).collect(),
+            outstanding: count,
+            base_ordinal,
+            chunk,
+        };
+        for (node, offset_ms) in roots {
+            live.prepared[node] = Some(self.workload.prepare(
+                &live.chunk.payload,
+                node,
+                base_ordinal + node,
+            )?);
+            self.ready.push(
+                start_ns
+                    .checked_add(scaled_offset_ns(offset_ms, self.time_scale)?)
+                    .context("causal chunk start timestamp overflow")?,
+                base_ordinal + node,
+                (id, node),
+            );
+        }
+        self.live.insert(id, live);
+        Ok(())
+    }
+
+    fn take_request(&mut self, chunk: usize, node: usize) -> Result<PreparedRequest> {
+        self.live
+            .get_mut(&chunk)
+            .and_then(|live| live.prepared.get_mut(node))
             .and_then(Option::take)
-            .with_context(|| format!("{} node {ordinal} was released twice", self.workload.name()))
+            .with_context(|| {
+                format!(
+                    "{} chunk {chunk} node {node} was released twice",
+                    self.workload.name()
+                )
+            })
     }
 
     fn release(
         &mut self,
-        (ordinal, completed_at, result): (usize, Instant, RequestResult),
+        (id, node, completed_at, result): (usize, usize, Instant, RequestResult),
     ) -> Result<()> {
         let completed_ns = duration_ns(completed_at.saturating_duration_since(self.base));
         self.sink.record(result)?;
-        let successors = self
-            .successors
-            .get(ordinal)
-            .with_context(|| {
-                format!(
-                    "{} node {ordinal} has no successor slot",
-                    self.workload.name()
-                )
-            })?
-            .clone();
-        for successor in successors {
-            let ready_at_ns = {
-                let remaining = self
-                    .remaining_dependencies
-                    .get_mut(successor)
-                    .with_context(|| {
-                        format!("{} successor {successor} is missing", self.workload.name())
-                    })?;
-                *remaining = remaining.checked_sub(1).with_context(|| {
-                    format!(
-                        "{} successor {successor} was released twice",
-                        self.workload.name()
-                    )
-                })?;
-                let dependency_completion_ns = self
-                    .dependency_completion_ns
-                    .get_mut(successor)
-                    .with_context(|| {
-                        format!(
-                            "{} successor {successor} is missing timing",
-                            self.workload.name()
-                        )
-                    })?;
-                *dependency_completion_ns = (*dependency_completion_ns).max(completed_ns);
-                (*remaining == 0).then_some(*dependency_completion_ns)
-            };
-            if let Some(dependency_completion_ns) = ready_at_ns {
+        if self.stopped {
+            return Ok(());
+        }
+        let name = self.workload.name();
+        let live = self
+            .live
+            .get_mut(&id)
+            .with_context(|| format!("{name} chunk {id} completed after it was dropped"))?;
+        for successor in live.successors[node].clone() {
+            live.remaining_dependencies[successor] = live.remaining_dependencies[successor]
+                .checked_sub(1)
+                .with_context(|| format!("{name} chunk {id} node {successor} released twice"))?;
+            let completion = &mut live.dependency_completion_ns[successor];
+            *completion = (*completion).max(completed_ns);
+            if live.remaining_dependencies[successor] == 0 {
                 let delay_ns = scaled_offset_ns(
-                    self.workload.delay_after_dependencies_ms(successor),
+                    live.chunk.nodes[successor].delay_after_dependencies_ms,
                     self.time_scale,
                 )?;
-                let slot = self.prepared.get_mut(successor).with_context(|| {
-                    format!("{} successor {successor} is missing", self.workload.name())
-                })?;
-                if slot.is_some() {
-                    bail!(
-                        "{} successor {successor} was prepared twice",
-                        self.workload.name()
-                    );
+                if live.prepared[successor].is_some() {
+                    bail!("{name} chunk {id} node {successor} was prepared twice");
                 }
-                *slot = Some(self.workload.prepare(successor)?);
+                live.prepared[successor] = Some(self.workload.prepare(
+                    &live.chunk.payload,
+                    successor,
+                    live.base_ordinal + successor,
+                )?);
                 self.ready.push(
-                    dependency_completion_ns
+                    live.dependency_completion_ns[successor]
                         .checked_add(delay_ns)
                         .context("causal successor timestamp overflow")?,
-                    successor,
-                    successor,
+                    live.base_ordinal + successor,
+                    (id, successor),
                 );
+            }
+        }
+        let anchor = live.chunk.anchor == Some(node);
+        live.outstanding -= 1;
+        if live.outstanding == 0 {
+            self.live.remove(&id);
+        }
+        if anchor && let Some((delay_ms, next)) = self.workload.successor(id)? {
+            let start_ns = completed_ns
+                .checked_add(scaled_offset_ns(delay_ms, self.time_scale)?)
+                .context("causal successor chunk timestamp overflow")?;
+            if !self
+                .start_deadline_ns
+                .is_some_and(|deadline| start_ns >= deadline)
+            {
+                self.pending_starts.push(start_ns, next, next);
             }
         }
         Ok(())

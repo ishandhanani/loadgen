@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -9,7 +10,9 @@ use anyhow::{Context, Result, bail};
 use hdrhistogram::Histogram;
 use serde::Serialize;
 
-use super::{Percentiles, ReplayOptions, RequestResult, RunSummary, TrafficKind, millis};
+use super::{
+    Percentiles, Performance, ReplayOptions, RequestResult, RunSummary, TrafficKind, millis,
+};
 use crate::clock::TIMER_BACKEND;
 use crate::token_shape::TokenDictionaryManifest;
 use agent_loadgen_core::TraceManifest;
@@ -27,15 +30,18 @@ impl ResultSink {
         path: &Path,
         flush_interval: usize,
         dispatch_p99_limit_ms: f64,
+        timeline_bucket: Duration,
     ) -> Result<Self> {
         let writer = BufWriter::new(
             File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
         );
+        let mut accumulator = RunAccumulator::new(dispatch_p99_limit_ms)?;
+        accumulator.timeline_bucket_ms = millis(timeline_bucket);
         Ok(Self {
             writer,
             flush_interval,
             records_since_flush: 0,
-            accumulator: RunAccumulator::new(dispatch_p99_limit_ms)?,
+            accumulator,
         })
     }
 
@@ -75,6 +81,26 @@ pub(super) struct RunAccumulator {
     dispatch_p99_limit_ms: f64,
     pub(super) dispatch_at_or_below_p99_limit: usize,
     pub(super) dispatch_max_ms: f64,
+    ttft_us: Histogram<u64>,
+    latency_us: Histogram<u64>,
+    tpot_us: Histogram<u64>,
+    input_tokens: u64,
+    output_tokens: u64,
+    timeline_bucket_ms: f64,
+    timeline: Vec<TimelineBucket>,
+    sessions_seen: HashSet<String>,
+}
+
+/// Requests dispatched during one timeline bucket.
+#[derive(Default)]
+struct TimelineBucket {
+    requests: usize,
+    failed: usize,
+    input_tokens: u64,
+    output_tokens: u64,
+    sessions_started: usize,
+    ttft_ms: Vec<f32>,
+    latency_ms: Vec<f32>,
 }
 
 impl RunAccumulator {
@@ -96,17 +122,26 @@ impl RunAccumulator {
             dispatch_p99_limit_ms,
             dispatch_at_or_below_p99_limit: 0,
             dispatch_max_ms: 0.0,
+            ttft_us: Histogram::new(3)?,
+            latency_us: Histogram::new(3)?,
+            tpot_us: Histogram::new(3)?,
+            input_tokens: 0,
+            output_tokens: 0,
+            timeline_bucket_ms: 60_000.0,
+            timeline: Vec::new(),
+            sessions_seen: HashSet::new(),
         })
     }
 
     fn record(&mut self, result: &RequestResult) -> Result<()> {
         self.request_count += 1;
         let planned_abort_succeeded = result.planned_abort_match == Some(true);
-        if planned_abort_succeeded
-            || (result.error.is_none() && result.status_code.is_some_and(|status| status < 400))
-        {
+        let succeeded = planned_abort_succeeded
+            || (result.error.is_none() && result.status_code.is_some_and(|status| status < 400));
+        if succeeded {
             self.succeeded += 1;
         }
+        self.record_performance(result, succeeded)?;
         if result.expected_output_tokens.is_some() {
             self.budgeted_requests += 1;
             match result.output_length_match {
@@ -139,6 +174,111 @@ impl RunAccumulator {
         self.dispatch_max_ms = self.dispatch_max_ms.max(result.dispatch_lag_ms);
         Ok(())
     }
+}
+
+impl RunAccumulator {
+    fn record_performance(&mut self, result: &RequestResult, succeeded: bool) -> Result<()> {
+        let output_tokens = result.observed_output_tokens.unwrap_or(0);
+        self.input_tokens += result.expected_input_tokens as u64;
+        self.output_tokens += output_tokens;
+        let bucket = (result.dispatch_offset_ms / self.timeline_bucket_ms) as usize;
+        if self.timeline.len() <= bucket {
+            self.timeline
+                .resize_with(bucket + 1, TimelineBucket::default);
+        }
+        let entry = &mut self.timeline[bucket];
+        entry.requests += 1;
+        entry.input_tokens += result.expected_input_tokens as u64;
+        entry.output_tokens += output_tokens;
+        if let Some(session) = &result.session_id
+            && !self.sessions_seen.contains(session)
+        {
+            self.sessions_seen.insert(session.clone());
+            entry.sessions_started += 1;
+        }
+        if !succeeded {
+            entry.failed += 1;
+            return Ok(());
+        }
+        if result.planned_abort_match.is_some() {
+            return Ok(());
+        }
+        record_milliseconds(&mut self.latency_us, result.total_time_ms)?;
+        entry.latency_ms.push(result.total_time_ms as f32);
+        if let Some(ttft_ms) = result.ttft_ms {
+            record_milliseconds(&mut self.ttft_us, ttft_ms)?;
+            entry.ttft_ms.push(ttft_ms as f32);
+            if output_tokens > 1 {
+                let tpot_ms =
+                    (result.total_time_ms - ttft_ms).max(0.0) / (output_tokens - 1) as f64;
+                record_milliseconds(&mut self.tpot_us, tpot_ms)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn performance(&self, elapsed: Duration) -> Performance {
+        let seconds = elapsed.as_secs_f64().max(f64::MIN_POSITIVE);
+        Performance {
+            requests_per_second: self.request_count as f64 / seconds,
+            input_tokens_per_second: self.input_tokens as f64 / seconds,
+            output_tokens_per_second: self.output_tokens as f64 / seconds,
+            ttft_ms: histogram_percentiles(&self.ttft_us),
+            request_latency_ms: histogram_percentiles(&self.latency_us),
+            tpot_ms: histogram_percentiles(&self.tpot_us),
+        }
+    }
+}
+
+/// Write one CSV row per timeline bucket of dispatched requests.
+pub(super) fn write_timeline(path: &Path, accumulator: &RunAccumulator) -> Result<()> {
+    let mut writer = BufWriter::new(
+        File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
+    );
+    writeln!(
+        writer,
+        "start_s,requests,failed,sessions_started,requests_per_s,input_tokens_per_s,output_tokens_per_s,ttft_p50_ms,ttft_p99_ms,latency_p50_ms,latency_p99_ms"
+    )?;
+    let seconds = accumulator.timeline_bucket_ms / 1000.0;
+    for (index, bucket) in accumulator.timeline.iter().enumerate() {
+        let ttft = sorted(&bucket.ttft_ms);
+        let latency = sorted(&bucket.latency_ms);
+        writeln!(
+            writer,
+            "{},{},{},{},{:.3},{:.1},{:.1},{},{},{},{}",
+            index as f64 * seconds,
+            bucket.requests,
+            bucket.failed,
+            bucket.sessions_started,
+            bucket.requests as f64 / seconds,
+            bucket.input_tokens as f64 / seconds,
+            bucket.output_tokens as f64 / seconds,
+            quantile(&ttft, 0.50),
+            quantile(&ttft, 0.99),
+            quantile(&latency, 0.50),
+            quantile(&latency, 0.99),
+        )?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn sorted(values: &[f32]) -> Vec<f32> {
+    let mut values = values.to_vec();
+    values.sort_by(f32::total_cmp);
+    values
+}
+
+/// Nearest-rank quantile, or an empty CSV field when there are no values.
+fn quantile(sorted: &[f32], quantile: f64) -> String {
+    if sorted.is_empty() {
+        return String::new();
+    }
+    let rank = (sorted.len() as f64 * quantile).ceil() as usize;
+    format!(
+        "{:.1}",
+        sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+    )
 }
 
 fn record_milliseconds(histogram: &mut Histogram<u64>, value: f64) -> Result<()> {
@@ -179,6 +319,7 @@ pub(super) fn summarize(
     options: &ReplayOptions,
     accumulator: &RunAccumulator,
     elapsed: Duration,
+    stopped_early: bool,
 ) -> RunSummary {
     let scheduler_wake_lag_ms = histogram_percentiles(&accumulator.scheduler_wake_lag_us);
     let mut dispatch_lag_ms = histogram_percentiles(&accumulator.dispatch_lag_us);
@@ -186,8 +327,10 @@ pub(super) fn summarize(
     // value just over the configured hard limit cannot round down and pass.
     dispatch_lag_ms.max = accumulator.dispatch_max_ms;
     let local_admission_lag_ms = histogram_percentiles(&accumulator.local_admission_lag_us);
-    let request_fidelity_matches = accumulator.request_count == source.request_count
-        && accumulator.succeeded == source.request_count
+    // A run stopped by `stop_after` is judged on the requests it sent.
+    let request_fidelity_matches = (stopped_early
+        || accumulator.request_count == source.request_count)
+        && accumulator.succeeded == accumulator.request_count
         && accumulator.output_length_matches == accumulator.budgeted_requests
         && accumulator.missing_output_usage == 0
         && accumulator.planned_abort_matches == accumulator.planned_aborts;
@@ -243,6 +386,9 @@ pub(super) fn summarize(
         scheduler_wake_lag_ms,
         dispatch_lag_ms,
         local_admission_lag_ms,
+        performance: accumulator.performance(elapsed),
+        timeline_bucket_seconds: accumulator.timeline_bucket_ms / 1000.0,
+        stopped_early,
         request_fidelity_matches,
         dispatch_timing_matches,
         passed,

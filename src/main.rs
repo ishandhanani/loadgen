@@ -2,10 +2,12 @@
 
 use std::time::Duration;
 
-use agent_loadgen_generate::scenario::{GeneratedScenario, GeneratorConfig, write_plan_graph};
+use agent_loadgen_generate::scenario::{
+    GeneratorConfig, PlanSummary, TreePlanner, write_plan_graph,
+};
 use agent_loadgen_replay::telemetry::join_engine_telemetry;
 use agent_loadgen_replay::token_shape::TokenDictionary;
-use agent_loadgen_replay::{ReplayOptions, run_agentic_replay, run_generated_scenario};
+use agent_loadgen_replay::{ReplayOptions, run_agentic_replay, run_generated};
 use agent_loadgen_trace::compare::{CompareOptions, compare_traces};
 use agent_loadgen_trace::load_agentic_trace;
 use anyhow::{Context, Result, bail};
@@ -63,6 +65,7 @@ async fn main() -> Result<()> {
             timeout_seconds,
             time_scale,
             static_headers,
+            run,
         } => {
             let trace = load_agentic_trace(
                 &trace,
@@ -98,6 +101,9 @@ async fn main() -> Result<()> {
                         "engine cache mode",
                     )?,
                     static_headers: parse_headers(static_headers)?,
+                    timeline_bucket: run.timeline_bucket()?,
+                    token_salt: run.token_salt(),
+                    stop_after: run.stop_after()?,
                 },
             )
             .await?;
@@ -107,29 +113,8 @@ async fn main() -> Result<()> {
             }
         }
         Command::Plan { config, output } => {
-            let scenario = GeneratedScenario::generate(GeneratorConfig::load(&config)?.resolve()?)?;
-            std::fs::create_dir_all(&output).with_context(|| {
-                format!("failed to create output directory {}", output.display())
-            })?;
-            let scenario_path = output.join("scenario.json");
-            let writer = std::io::BufWriter::new(
-                std::fs::File::create(&scenario_path)
-                    .with_context(|| format!("failed to create {}", scenario_path.display()))?,
-            );
-            serde_json::to_writer_pretty(writer, &scenario)
-                .with_context(|| format!("failed to write {}", scenario_path.display()))?;
-            let graph_artifacts = write_plan_graph(&output, &scenario)?;
-            let output = serde_json::json!({
-                "scenario_digest_sha256": scenario.scenario_digest_sha256,
-                "profile_digest_sha256": scenario.profile_digest_sha256,
-                "requests": scenario.nodes.len(),
-                "session_topology": scenario.session_topology,
-                "tool_parallelism": scenario.tool_parallelism,
-                "trace_manifest": scenario.trace_manifest,
-                "scenario_path": scenario_path,
-                "graph_path": graph_artifacts.dot_path,
-                "graphviz_svg_path": graph_artifacts.svg_path,
-            });
+            let planner = TreePlanner::new(GeneratorConfig::load(&config)?.resolve()?)?;
+            let output = write_plan_artifacts(&planner, &output)?;
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
         Command::Generate {
@@ -151,15 +136,13 @@ async fn main() -> Result<()> {
             timeout_seconds,
             time_scale,
             static_headers,
+            run,
         } => {
-            let scenario = GeneratedScenario::generate(GeneratorConfig::load(&config)?.resolve()?)?;
-            let dictionary = TokenDictionary::new(
-                scenario.trace_manifest.trace_block_size,
-                scenario.trace_manifest.distinct_sequence_hashes,
-                tokens.load()?,
-            )?;
-            let summary = run_generated_scenario(
-                &scenario,
+            let planner = TreePlanner::new(GeneratorConfig::load(&config)?.resolve()?)?;
+            write_plan_artifacts(&planner, &output)?;
+            let dictionary = TokenDictionary::new(planner.config().block_size, 0, tokens.load()?)?;
+            let summary = run_generated(
+                &planner,
                 dictionary,
                 ReplayOptions {
                     header_dialect,
@@ -182,6 +165,9 @@ async fn main() -> Result<()> {
                         "engine cache mode",
                     )?,
                     static_headers: parse_headers(static_headers)?,
+                    timeline_bucket: run.timeline_bucket()?,
+                    token_salt: run.token_salt(),
+                    stop_after: run.stop_after()?,
                 },
             )
             .await?;
@@ -249,6 +235,49 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Write plan-summary.json and, when the plan fits one graph, scenario.json,
+/// plan.dot, and plan.svg.
+fn write_plan_artifacts(
+    planner: &TreePlanner,
+    output: &std::path::Path,
+) -> Result<serde_json::Value> {
+    std::fs::create_dir_all(output)
+        .with_context(|| format!("failed to create output directory {}", output.display()))?;
+    let summary = PlanSummary::sample(planner)?;
+    let summary_path = output.join("plan-summary.json");
+    write_pretty_json(&summary_path, &summary)?;
+    let mut result = serde_json::json!({
+        "summary": summary,
+        "summary_path": summary_path,
+    });
+    // Only finite plans within limits.max_nodes are joined into one graph.
+    let fits = planner.tree_count().is_some_and(|trees| {
+        summary.per_tree.requests.mean * trees as f64 <= planner.config().max_nodes as f64
+    });
+    if fits && let Ok(scenario) = planner.materialize() {
+        let scenario_path = output.join("scenario.json");
+        write_pretty_json(&scenario_path, &scenario)?;
+        let graph = write_plan_graph(output, &scenario)?;
+        result["scenario_digest_sha256"] = serde_json::json!(scenario.scenario_digest_sha256);
+        result["requests"] = serde_json::json!(scenario.nodes.len());
+        result["session_topology"] = serde_json::json!(scenario.session_topology);
+        result["tool_parallelism"] = serde_json::json!(scenario.tool_parallelism);
+        result["scenario_path"] = serde_json::json!(scenario_path);
+        result["graph_path"] = serde_json::json!(graph.dot_path);
+        result["graphviz_svg_path"] = serde_json::json!(graph.svg_path);
+    }
+    Ok(result)
+}
+
+fn write_pretty_json(path: &std::path::Path, value: &impl serde::Serialize) -> Result<()> {
+    let writer = std::io::BufWriter::new(
+        std::fs::File::create(path)
+            .with_context(|| format!("failed to create {}", path.display()))?,
+    );
+    serde_json::to_writer_pretty(writer, value)
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn home_dir() -> Result<std::path::PathBuf> {
