@@ -2,6 +2,8 @@
 
 # How agent-loadgen works
 
+[Watch a 78-second visual overview](assets/agent-loadgen-concepts.mp4) of the ideas on this page: growing agent contexts, the KV-prefix trie, causal timing with subagents, arrival schedules, and harness headers.
+
 `agent-loadgen` has two graph producers and one causal timing contract:
 
 ```text

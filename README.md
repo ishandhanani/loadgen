@@ -1,6 +1,6 @@
 # agent-loadgen
 
-[![A 78-second introduction: growing agent contexts, the KV-prefix trie, causal timing with subagents, arrival schedules, harness headers, and run artifacts](docs/assets/agent-loadgen-intro.webp)](docs/assets/agent-loadgen-intro.mp4)
+[![A 90-second tour of a workload profile: each TOML section, what its knobs change in the plan, then plan and generate](docs/assets/agent-loadgen-intro.webp)](docs/assets/agent-loadgen-intro.mp4)
 
 Click the animation for the full-resolution video with playback controls.
 
