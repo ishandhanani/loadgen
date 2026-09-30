@@ -544,7 +544,6 @@ impl Planner {
                 "expected_effect": expected_effect,
                 "window_epoch": state.window_epoch,
                 "pre_tokens": state.blocks.len() * self.config.block_size,
-                "output_budget_tokens": null,
             });
             let node = self.push_request(
                 state,
@@ -564,7 +563,7 @@ impl Planner {
                     } else {
                         0
                     },
-                    output_budget_tokens: None,
+                    output_budget_tokens: Some(summary_tokens),
                     compaction: Some(compaction),
                     compaction_attempt: Some(attempt_metadata),
                 },

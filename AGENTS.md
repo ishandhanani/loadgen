@@ -12,7 +12,7 @@ All traffic is agentic and causal. Captured replay uses Dynamo's lowering policy
 
 Generated traffic is also causal. A model response or sampled agent delay releases the next request. Target latency therefore changes the achieved request rate in both modes.
 
-Captured requests and ordinary generated turns have positive input and output token counts. Compaction attempts can omit an output budget. A session completes with its last model response. With `--dynamo-session-final`, that response carries `x-dynamo-session-final: true`; the header marks an existing request and never adds one. Do not add lifecycle-control requests or zero-output close nodes without a new design decision.
+Captured requests and ordinary generated turns have positive input and output token counts. Compaction attempts carry the planned summary length as their output budget. A session completes with its last model response. With `--dynamo-session-final`, that response carries `x-dynamo-session-final: true`; the header marks an existing request and never adds one. Do not add lifecycle-control requests or zero-output close nodes without a new design decision.
 
 Traffic shape and wire protocol are separate. The profile or trace defines shape; there is no per-agent preset. `--headers {claude-code|codex}` selects the harness header dialect at run time and must never influence planning or digests. A dialect sends only its harness's own headers; `x-dynamo-session-final` is opt-in through `--dynamo-session-final`.
 

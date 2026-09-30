@@ -35,7 +35,7 @@ The default abort and retry probabilities are zero. In that configuration, one l
 
 `duplicate_noop` represents a duplicate physical request after success. It must not change the planned context a second time.
 
-All compaction requests omit a forced output budget. `compaction.summary_output_tokens` controls retained synthetic summary size. It does not force the target response length.
+Every attempt asks for the planned summary: it sends `max_tokens` with `ignore_eos` set to the sampled `compaction.summary_output_tokens`. Synthetic prompts give a model no natural place to stop, so an unbounded attempt would decode until the context limit and its output length would no longer follow the plan. Only the `apply_once` attempt adds the summary to later context.
 
 ## KV-window change
 
