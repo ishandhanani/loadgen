@@ -139,6 +139,6 @@ The dialect is a run-time flag, recorded in `run.json` as `header_dialect`, and 
 
 `profiles/tools-heavy.toml` sets `seed = 42`, widens root turns to `uniform(4, 12)`, and replaces the generic tool list with a faster, smaller-result calibration of the same six classes. It is intentionally a useful load shape, not a native-harness calibration.
 
-`profiles/claude-code.toml`, `profiles/codex.toml`, and `profiles/swe-bench.toml` write harness- and workload-shaped values into every section, and `profiles/diurnal-8h.toml` puts the Claude Code shape under an eight-hour request-rate schedule. Each file's header comment separates measured values from assumptions; see [Describe a workload](workloads.md). They are shapes only: pair them with the matching `--headers` dialect to also match the harness on the wire.
+`profiles/claude-code.toml`, `profiles/codex.toml`, and `profiles/swe-bench.toml` write harness- and workload-shaped values into every section, `profiles/diurnal-8h.toml` puts the Claude Code shape under an eight-hour request-rate schedule, and `profiles/astra-fleet.toml` is fitted to the astra production fleet's agent sessions and daily start pattern. Each file's header comment separates measured values from assumptions; see [Describe a workload](workloads.md). They are shapes only: pair them with the matching `--headers` dialect to also match the harness on the wire.
 
 Reasoning versus visible output, exact per-class parallel eligibility, history-fork modes, and model-specific compaction output still require trace evidence.
