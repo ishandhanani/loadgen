@@ -5,33 +5,383 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, bail};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rand_distr::{Distribution, Exp};
 use sha2::{Digest, Sha256};
 
-use super::config::{GENERATOR_SCHEMA_VERSION, ResolvedGeneratorConfig, ToolClass};
+use super::config::{
+    GENERATOR_SCHEMA_VERSION, Interpolation, RateUnit, ResolvedGeneratorConfig, ResolvedLoad,
+    ToolClass,
+};
 use super::model::{
     CompactionExpectedEffect, GeneratedCompactionAttempt, GeneratedCompactionOperation,
     GeneratedNode, GeneratedScenario, GeneratedSession, GeneratedSessionTopology,
-    GeneratedToolEvent,
+    GeneratedToolEvent, PlannedTree,
 };
 use super::tool_parallelism::summarize_tool_parallelism;
 use agent_loadgen_core::{AgentContext, TraceManifest, TraceRequest};
 
+/// Trees planned to convert a request-rate schedule into session arrivals.
+const RATE_CALIBRATION_TREES: usize = 1_000;
+
 impl GeneratedScenario {
+    /// Plan every top-level session tree and join them into one request graph.
     pub fn generate(config: ResolvedGeneratorConfig) -> Result<Self> {
-        Planner::new(config)?.generate()
+        TreePlanner::new(config)?.materialize()
     }
 }
 
-struct Planner {
+/// Plans top-level session trees independently.
+///
+/// Each tree samples from its own random stream derived from the seed and the
+/// tree index, so a run can plan trees lazily, in any order, with the same
+/// result as planning them all up front.
+pub struct TreePlanner {
     config: ResolvedGeneratorConfig,
-    rng: StdRng,
+    profile_digest_sha256: String,
     shared_prefix: Vec<u64>,
+    shared_label_owners: BTreeMap<u64, String>,
+    arrivals: Option<ArrivalPlan>,
+}
+
+/// Sampled open-loop tree start times.
+#[derive(Debug, Clone)]
+pub struct ArrivalPlan {
+    /// Start offset of each tree, in tree-index order.
+    pub arrival_ms: Vec<u64>,
+    /// Session rate per bucket, after converting a request-rate schedule.
+    pub sessions_per_minute: Vec<f64>,
+    /// Mean requests per tree used for that conversion.
+    pub calibration_requests_per_tree: Option<f64>,
+}
+
+impl TreePlanner {
+    pub fn new(config: ResolvedGeneratorConfig) -> Result<Self> {
+        config.validate()?;
+        let profile_digest_sha256 = hex::encode(Sha256::digest(serde_json::to_vec(&config)?));
+        let mut planner = Self {
+            config,
+            profile_digest_sha256,
+            shared_prefix: Vec::new(),
+            shared_label_owners: BTreeMap::new(),
+            arrivals: None,
+        };
+        let mut shared = TreeBuilder::new(
+            &planner,
+            usize::MAX,
+            stream_rng(planner.config.seed, "shared"),
+        );
+        let system_tokens = shared.config.system_prefix_tokens.sample(&mut shared.rng)?;
+        let tool_tokens = shared.config.tool_catalog_tokens.sample(&mut shared.rng)?;
+        let mut prefix = shared.segment("shared:system", system_tokens)?;
+        prefix.extend(shared.segment("shared:tools", tool_tokens)?);
+        let owners = std::mem::take(&mut shared.label_owners);
+        planner.shared_prefix = prefix;
+        planner.shared_label_owners = owners;
+        planner.arrivals = planner.sample_arrivals()?;
+        Ok(planner)
+    }
+
+    pub fn config(&self) -> &ResolvedGeneratorConfig {
+        &self.config
+    }
+
+    pub fn profile_digest_sha256(&self) -> &str {
+        &self.profile_digest_sha256
+    }
+
+    /// Blocks every request starts with: the system prompt and tool catalog.
+    pub fn shared_prefix(&self) -> &[u64] {
+        &self.shared_prefix
+    }
+
+    pub fn shared_prefix_blocks(&self) -> usize {
+        self.shared_prefix.len()
+    }
+
+    /// Open-loop arrivals, when the load is an arrival schedule.
+    pub fn arrivals(&self) -> Option<&ArrivalPlan> {
+        self.arrivals.as_ref()
+    }
+
+    /// Number of trees, or `None` for streams that run until a duration.
+    pub fn tree_count(&self) -> Option<usize> {
+        match (&self.config.load, &self.arrivals) {
+            (_, Some(arrivals)) => Some(arrivals.arrival_ms.len()),
+            (ResolvedLoad::Streams { num_sessions, .. }, None) => *num_sessions,
+            (ResolvedLoad::Arrivals { .. }, None) => Some(0),
+        }
+    }
+
+    /// Plan one top-level session tree with tree-local ordinals.
+    ///
+    /// Node 0 is the tree's first request and has no dependencies.
+    pub fn plan_tree(&self, index: usize) -> Result<PlannedTree> {
+        let slot = match &self.config.load {
+            ResolvedLoad::Streams {
+                concurrent_sessions,
+                ..
+            } => index % concurrent_sessions,
+            ResolvedLoad::Arrivals { .. } => index,
+        };
+        let mut builder = TreeBuilder::new(self, index, tree_rng(self.config.seed, index));
+        let restart_delay_ms = match &self.config.load {
+            ResolvedLoad::Streams {
+                restart_delay_ms, ..
+            } => restart_delay_ms.sample(&mut builder.rng)?,
+            ResolvedLoad::Arrivals { .. } => 0,
+        };
+        let root_final = builder
+            .generate_session(SessionLaunch {
+                parent_session_id: None,
+                depth: 0,
+                first_dependencies: Vec::new(),
+                first_delay_ms: 0,
+                initial_arrival_ms: Some(0),
+                top_level_session_index: index,
+                top_level_stream_slot: slot,
+            })?
+            .with_context(|| format!("generation limits prevented top-level session {index}"))?;
+        builder.mark_session_finals()?;
+        Ok(PlannedTree {
+            index,
+            restart_delay_ms,
+            root_final,
+            total_input_tokens: builder.total_input_tokens,
+            sessions: builder.sessions,
+            nodes: builder.nodes,
+            compaction_operations: builder.compaction_operations,
+        })
+    }
+
+    fn sample_arrivals(&self) -> Result<Option<ArrivalPlan>> {
+        let ResolvedLoad::Arrivals {
+            bucket_minutes,
+            rate_unit,
+            rates,
+            interpolation,
+        } = &self.config.load
+        else {
+            return Ok(None);
+        };
+        let (sessions_per_minute, calibration_requests_per_tree) = match rate_unit {
+            RateUnit::SessionsPerMinute => (rates.clone(), None),
+            RateUnit::RequestsPerSecond => {
+                let mut requests = 0;
+                for index in 0..RATE_CALIBRATION_TREES {
+                    requests += self.plan_tree(index)?.nodes.len();
+                }
+                let per_tree = requests as f64 / RATE_CALIBRATION_TREES as f64;
+                let rates = rates.iter().map(|rate| rate * 60.0 / per_tree).collect();
+                (rates, Some(per_tree))
+            }
+        };
+        let bucket_ms = bucket_minutes * 60_000.0;
+        let duration_ms = bucket_ms * sessions_per_minute.len() as f64;
+        let rate_at = |t: f64| -> f64 {
+            let last = sessions_per_minute.len() - 1;
+            match interpolation {
+                Interpolation::Step => sessions_per_minute[((t / bucket_ms) as usize).min(last)],
+                Interpolation::Linear => {
+                    let position = (t / bucket_ms - 0.5).clamp(0.0, last as f64);
+                    let lower = position.floor() as usize;
+                    let upper = (lower + 1).min(last);
+                    let fraction = position - lower as f64;
+                    sessions_per_minute[lower] * (1.0 - fraction)
+                        + sessions_per_minute[upper] * fraction
+                }
+            }
+        };
+        // Thinning: propose at the peak rate, accept in proportion to the rate.
+        let peak_per_ms = sessions_per_minute.iter().copied().fold(0.0, f64::max) / 60_000.0;
+        let gaps = Exp::new(peak_per_ms).context("invalid peak arrival rate")?;
+        let mut rng = stream_rng(self.config.seed, "arrivals");
+        let mut arrival_ms = Vec::new();
+        let mut t = 0.0;
+        loop {
+            t += gaps.sample(&mut rng);
+            if t >= duration_ms {
+                break;
+            }
+            if rng.random::<f64>() * peak_per_ms * 60_000.0 < rate_at(t) {
+                arrival_ms.push(t as u64);
+            }
+        }
+        if arrival_ms.is_empty() {
+            bail!("the arrival schedule produced no sessions; raise the rates or the duration");
+        }
+        Ok(Some(ArrivalPlan {
+            arrival_ms,
+            sessions_per_minute,
+            calibration_requests_per_tree,
+        }))
+    }
+
+    /// Plan every tree and join them into one request graph.
+    pub fn materialize(&self) -> Result<GeneratedScenario> {
+        let tree_count = self.tree_count().context(
+            "streams without num_sessions run until duration_minutes and cannot be planned as one graph",
+        )?;
+        let mut sessions = Vec::new();
+        let mut nodes: Vec<GeneratedNode> = Vec::new();
+        let mut compaction_operations = Vec::new();
+        let mut root_finals = Vec::with_capacity(tree_count);
+        let mut total_input_tokens = 0_u64;
+        for index in 0..tree_count {
+            let tree = self.plan_tree(index)?;
+            let offset = nodes.len();
+            let (dependencies, delay_ms, arrival_ms) = match (&self.config.load, &self.arrivals) {
+                (_, Some(arrivals)) => (Vec::new(), 0, Some(arrivals.arrival_ms[index])),
+                (
+                    ResolvedLoad::Streams {
+                        concurrent_sessions,
+                        startup_interval_ms,
+                        ..
+                    },
+                    None,
+                ) if index < *concurrent_sessions => (
+                    Vec::new(),
+                    0,
+                    Some(
+                        (index as u64)
+                            .checked_mul(*startup_interval_ms)
+                            .context("top-level stream startup timestamp overflow")?,
+                    ),
+                ),
+                (
+                    ResolvedLoad::Streams {
+                        concurrent_sessions,
+                        ..
+                    },
+                    None,
+                ) => (
+                    vec![root_finals[index - concurrent_sessions]],
+                    tree.restart_delay_ms,
+                    None,
+                ),
+                (ResolvedLoad::Arrivals { .. }, None) => unreachable!("arrivals are sampled"),
+            };
+            for (local, mut node) in tree.nodes.into_iter().enumerate() {
+                if local == 0 {
+                    node.dependencies = dependencies.clone();
+                    node.delay_after_dependencies_ms = delay_ms;
+                    node.initial_arrival_ms = arrival_ms;
+                    node.request.request_received_ms = arrival_ms.unwrap_or(0);
+                } else {
+                    for dependency in &mut node.dependencies {
+                        *dependency += offset;
+                    }
+                }
+                node.request.ordinal = offset + local;
+                nodes.push(node);
+            }
+            for mut operation in tree.compaction_operations {
+                for attempt in &mut operation.attempts {
+                    *attempt += offset;
+                }
+                compaction_operations.push(operation);
+            }
+            root_finals.push(offset + tree.root_final);
+            sessions.extend(tree.sessions);
+            total_input_tokens = total_input_tokens.saturating_add(tree.total_input_tokens);
+            if nodes.len() > self.config.max_nodes
+                || sessions.len() > self.config.max_sessions
+                || total_input_tokens > self.config.max_total_input_tokens
+            {
+                bail!(
+                    "the plan exceeds limits.max_nodes, max_sessions, or max_total_input_tokens as one graph; `generate` streams large loads without these limits"
+                );
+            }
+        }
+        let trace_manifest = trace_manifest(
+            &nodes,
+            sessions.len(),
+            total_input_tokens,
+            self.config.block_size,
+            self.profile_digest_sha256.clone(),
+        )?;
+        let tool_parallelism = summarize_tool_parallelism(&nodes)?;
+        let session_topology = GeneratedSessionTopology {
+            configured_top_level_sessions: tree_count,
+            configured_concurrent_sessions: match &self.config.load {
+                ResolvedLoad::Streams {
+                    concurrent_sessions,
+                    ..
+                } => Some(*concurrent_sessions),
+                ResolvedLoad::Arrivals { .. } => None,
+            },
+            generated_subagent_sessions: sessions
+                .iter()
+                .filter(|session| session.parent_session_id.is_some())
+                .count(),
+            total_protocol_sessions: sessions.len(),
+        };
+        let scenario_bytes = serde_json::to_vec(&(
+            &self.profile_digest_sha256,
+            &session_topology,
+            &sessions,
+            &nodes,
+            &tool_parallelism,
+            &compaction_operations,
+            &trace_manifest,
+        ))?;
+        Ok(GeneratedScenario {
+            schema_version: GENERATOR_SCHEMA_VERSION,
+            profile_digest_sha256: self.profile_digest_sha256.clone(),
+            scenario_digest_sha256: hex::encode(Sha256::digest(scenario_bytes)),
+            config: self.config.clone(),
+            session_topology,
+            sessions,
+            nodes,
+            tool_parallelism,
+            compaction_operations,
+            trace_manifest,
+        })
+    }
+}
+
+fn stream_rng(seed: u64, stream: &str) -> StdRng {
+    let mut digest = Sha256::new();
+    digest.update(b"agent-loadgen/rng/v1");
+    digest.update(seed.to_le_bytes());
+    digest.update(stream.as_bytes());
+    StdRng::from_seed(digest.finalize().into())
+}
+
+fn tree_rng(seed: u64, index: usize) -> StdRng {
+    stream_rng(seed, &format!("tree:{index}"))
+}
+
+/// Samples one top-level session tree.
+struct TreeBuilder<'a> {
+    config: &'a ResolvedGeneratorConfig,
+    shared_prefix: &'a [u64],
+    shared_label_owners: &'a BTreeMap<u64, String>,
+    index: usize,
+    rng: StdRng,
     sessions: Vec<GeneratedSession>,
     nodes: Vec<GeneratedNode>,
     compaction_operations: Vec<GeneratedCompactionOperation>,
     labels: BTreeMap<String, u64>,
     label_owners: BTreeMap<u64, String>,
     total_input_tokens: u64,
+}
+
+impl<'a> TreeBuilder<'a> {
+    fn new(planner: &'a TreePlanner, index: usize, rng: StdRng) -> Self {
+        Self {
+            config: &planner.config,
+            shared_prefix: &planner.shared_prefix,
+            shared_label_owners: &planner.shared_label_owners,
+            index,
+            rng,
+            sessions: Vec::new(),
+            nodes: Vec::new(),
+            compaction_operations: Vec::new(),
+            labels: BTreeMap::new(),
+            label_owners: BTreeMap::new(),
+            total_input_tokens: 0,
+        }
+    }
 }
 
 struct SessionState {
@@ -87,111 +437,7 @@ impl NextAction {
     }
 }
 
-impl Planner {
-    fn new(config: ResolvedGeneratorConfig) -> Result<Self> {
-        config.validate()?;
-        let rng = StdRng::seed_from_u64(config.seed);
-        let mut planner = Self {
-            config,
-            rng,
-            shared_prefix: Vec::new(),
-            sessions: Vec::new(),
-            nodes: Vec::new(),
-            compaction_operations: Vec::new(),
-            labels: BTreeMap::new(),
-            label_owners: BTreeMap::new(),
-            total_input_tokens: 0,
-        };
-        let system_tokens = planner
-            .config
-            .system_prefix_tokens
-            .sample(&mut planner.rng)?;
-        let tool_tokens = planner
-            .config
-            .tool_catalog_tokens
-            .sample(&mut planner.rng)?;
-        planner.shared_prefix = planner.segment("shared:system", system_tokens)?;
-        let tool_prefix = planner.segment("shared:tools", tool_tokens)?;
-        planner.shared_prefix.extend(tool_prefix);
-        Ok(planner)
-    }
-
-    fn generate(mut self) -> Result<GeneratedScenario> {
-        let mut stream_finals = vec![None; self.config.concurrent_sessions];
-        for top_level_session_index in 0..self.config.num_sessions {
-            let top_level_stream_slot = top_level_session_index % self.config.concurrent_sessions;
-            let (dependencies, delay_ms, initial_arrival_ms) =
-                match stream_finals[top_level_stream_slot] {
-                    Some(previous_final) => (
-                        vec![previous_final],
-                        self.config.restart_delay_ms.sample(&mut self.rng)?,
-                        None,
-                    ),
-                    None => {
-                        let stream_slot = u64::try_from(top_level_stream_slot)
-                            .context("top-level stream slot does not fit u64")?;
-                        let arrival_ms = stream_slot
-                            .checked_mul(self.config.startup_interval_ms)
-                            .context("top-level stream startup timestamp overflow")?;
-                        (Vec::new(), 0, Some(arrival_ms))
-                    }
-                };
-            let final_node = self
-                .generate_session(SessionLaunch {
-                    parent_session_id: None,
-                    depth: 0,
-                    first_dependencies: dependencies,
-                    first_delay_ms: delay_ms,
-                    initial_arrival_ms,
-                    top_level_session_index,
-                    top_level_stream_slot,
-                })?
-                .with_context(|| {
-                    format!(
-                        "generation limits prevented top-level session {top_level_session_index}"
-                    )
-                })?;
-            stream_finals[top_level_stream_slot] = Some(final_node);
-        }
-        self.mark_session_finals()?;
-        let profile_bytes = serde_json::to_vec(&self.config)?;
-        let profile_digest_sha256 = hex::encode(Sha256::digest(&profile_bytes));
-        let trace_manifest = self.trace_manifest(profile_digest_sha256.clone())?;
-        let tool_parallelism = summarize_tool_parallelism(&self.nodes)?;
-        let session_topology = GeneratedSessionTopology {
-            configured_top_level_sessions: self.config.num_sessions,
-            configured_concurrent_sessions: self.config.concurrent_sessions,
-            generated_subagent_sessions: self
-                .sessions
-                .iter()
-                .filter(|session| session.parent_session_id.is_some())
-                .count(),
-            total_protocol_sessions: self.sessions.len(),
-        };
-        let scenario_bytes = serde_json::to_vec(&(
-            &profile_digest_sha256,
-            &session_topology,
-            &self.sessions,
-            &self.nodes,
-            &tool_parallelism,
-            &self.compaction_operations,
-            &trace_manifest,
-        ))?;
-        let scenario_digest_sha256 = hex::encode(Sha256::digest(scenario_bytes));
-        Ok(GeneratedScenario {
-            schema_version: GENERATOR_SCHEMA_VERSION,
-            profile_digest_sha256,
-            scenario_digest_sha256,
-            config: self.config,
-            session_topology,
-            sessions: self.sessions,
-            nodes: self.nodes,
-            tool_parallelism,
-            compaction_operations: self.compaction_operations,
-            trace_manifest,
-        })
-    }
-
+impl TreeBuilder<'_> {
     fn generate_session(&mut self, launch: SessionLaunch) -> Result<Option<usize>> {
         let SessionLaunch {
             parent_session_id,
@@ -208,8 +454,9 @@ impl Planner {
             return Ok(None);
         }
         let session_id = format!(
-            "generated-{:016x}-session-{}",
+            "generated-{:016x}-t{}-s{}",
             self.config.seed,
+            self.index,
             self.sessions.len()
         );
         self.sessions.push(GeneratedSession {
@@ -221,7 +468,7 @@ impl Planner {
         });
         let repository_tokens = self.config.repository_tokens.sample(&mut self.rng)?;
         let session_tokens = self.config.session_tokens.sample(&mut self.rng)?;
-        let mut blocks = self.shared_prefix.clone();
+        let mut blocks = self.shared_prefix.to_vec();
         blocks.extend(self.segment(
             &format!("top-level:{top_level_session_index}:repository"),
             repository_tokens,
@@ -489,8 +736,8 @@ impl Planner {
     ) -> Result<Vec<usize>> {
         let phase = "pre_turn";
         let operation_id = format!(
-            "compaction-{:016x}-{}-{}-{turn}",
-            self.config.seed, state.session_id, state.window_epoch
+            "compaction-{}-{}-{turn}",
+            state.session_id, state.window_epoch
         );
         let available_attempts = self.config.max_nodes.saturating_sub(self.nodes.len());
         let max_attempts = self.config.compaction_max_attempts.min(available_attempts);
@@ -646,10 +893,13 @@ impl Planner {
             bail!("generated request output must be greater than zero");
         }
         let ordinal = self.nodes.len();
-        let node_id = format!("node-{ordinal}");
+        let node_id = format!("t{}-n{ordinal}", self.index);
         let request = TraceRequest {
             ordinal,
-            source_request_id: format!("generated-{:016x}-{ordinal}", self.config.seed),
+            source_request_id: format!(
+                "generated-{:016x}-t{}-n{ordinal}",
+                self.config.seed, self.index
+            ),
             source_x_request_id: None,
             source_model: None,
             input_tokens,
@@ -726,7 +976,11 @@ impl Planner {
                 .try_into()
                 .expect("the digest prefix is eight bytes");
             let label = u64::from_le_bytes(bytes);
-            match self.label_owners.get(&label) {
+            match self
+                .label_owners
+                .get(&label)
+                .or_else(|| self.shared_label_owners.get(&label))
+            {
                 None => {
                     self.labels.insert(owner.to_string(), label);
                     self.label_owners.insert(label, owner.to_string());
@@ -738,42 +992,45 @@ impl Planner {
         }
         unreachable!("u64 nonce space is not exhausted")
     }
+}
 
-    fn trace_manifest(&self, digest: String) -> Result<TraceManifest> {
-        if self.nodes.is_empty() {
-            bail!("generated scenario contains no requests");
-        }
-        let hashes = self
-            .nodes
-            .iter()
-            .flat_map(|node| node.request.input_sequence_hashes.iter().copied())
-            .collect::<BTreeSet<_>>();
-        let input_tokens = self.total_input_tokens;
-        let output_tokens = self.nodes.iter().try_fold(0_u64, |total, node| {
-            total
-                .checked_add(node.request.output_tokens as u64)
-                .context("generated output token total overflow")
-        })?;
-        let last_initial_arrival = self
-            .nodes
-            .iter()
-            .filter_map(|node| node.initial_arrival_ms)
-            .max()
-            .unwrap_or(0);
-        Ok(TraceManifest {
-            request_count: self.nodes.len(),
-            session_count: self.sessions.len(),
-            requests_with_agent_context: self.nodes.len(),
-            first_request_received_ms: 0,
-            last_request_received_ms: last_initial_arrival,
-            duration_ms: last_initial_arrival,
-            input_tokens,
-            output_tokens,
-            distinct_sequence_hashes: hashes.len(),
-            trace_block_size: self.config.block_size,
-            source_digest_sha256: digest,
-        })
+fn trace_manifest(
+    nodes: &[GeneratedNode],
+    session_count: usize,
+    input_tokens: u64,
+    block_size: usize,
+    digest: String,
+) -> Result<TraceManifest> {
+    if nodes.is_empty() {
+        bail!("generated scenario contains no requests");
     }
+    let hashes = nodes
+        .iter()
+        .flat_map(|node| node.request.input_sequence_hashes.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let output_tokens = nodes.iter().try_fold(0_u64, |total, node| {
+        total
+            .checked_add(node.request.output_tokens as u64)
+            .context("generated output token total overflow")
+    })?;
+    let last_initial_arrival = nodes
+        .iter()
+        .filter_map(|node| node.initial_arrival_ms)
+        .max()
+        .unwrap_or(0);
+    Ok(TraceManifest {
+        request_count: nodes.len(),
+        session_count,
+        requests_with_agent_context: nodes.len(),
+        first_request_received_ms: 0,
+        last_request_received_ms: last_initial_arrival,
+        duration_ms: last_initial_arrival,
+        input_tokens,
+        output_tokens,
+        distinct_sequence_hashes: hashes.len(),
+        trace_block_size: block_size,
+        source_digest_sha256: digest,
+    })
 }
 
 #[cfg(test)]
