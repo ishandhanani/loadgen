@@ -209,12 +209,8 @@ async fn health_plan_and_replay_bundle_flow() {
     assert_eq!(health["creds"], json!(false));
     assert!(health["version"].is_string());
 
-    // /plan with a checked-in profile.
-    let toml = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../profiles/tools-heavy.toml"
-    ))
-    .unwrap();
+    // /plan with a small profile.
+    let toml = "schema_version = 5\nseed = 42\n[load]\nnum_sessions = 4\nconcurrent_sessions = 2\n";
     let started = Instant::now();
     let response = client
         .post(format!("{base}/plan"))

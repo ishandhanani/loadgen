@@ -2,7 +2,7 @@
 
 Generator profiles are strict, versioned TOML. Unknown fields and unsupported schema versions fail during planning. `scenario.json` contains the fully resolved configuration, so a run does not depend on hidden defaults after planning.
 
-Schema version 5 defines traffic shape entirely in the profile. There is no `agent` field and no per-agent preset: every omitted field resolves to the single neutral default set in [Generator defaults](presets.md). The coding-agent harness is a run-time wire choice, `--headers {claude-code|codex}`, and it never changes the plan or its digests.
+Schema version 5 defines traffic shape entirely in the profile. There is no `agent` field and no per-agent preset: every omitted field resolves to the single neutral default set listed under [Defaults](#defaults). The coding-agent harness is a run-time wire choice, `--headers {claude-code|codex}`, and it never changes the plan or its digests.
 
 Schema 4 profiles are rejected with a migration message: delete the `agent` line, set `schema_version = 5`, and pass `--headers` if a harness dialect is wanted. The five values the old presets varied (`tokens.system_prefix_tokens`, `tokens.tool_catalog_tokens`, `behavior.tool_probability`, `behavior.parallel_tool_probability`, `behavior.subagent_probability`) can be written into the profile explicitly to reproduce an old preset. Schema 3 names (`root_sessions`, `concurrent_agents`) remain rejected; there are no compatibility aliases.
 
@@ -51,11 +51,9 @@ schema_version = 5
 seed = 42
 ```
 
-Every other field is an optional override of the neutral defaults. Checked-in profiles contain only intentional deviations from those defaults; the sections below define the complete surface.
+Every other field is an optional override of the neutral defaults; the sections below define the complete surface, and [Defaults](#defaults) lists every default with its rationale.
 
-See [Generator defaults](presets.md) for every resolved default, the checked-in profile overrides, and the rationale behind each value.
-
-The override surface is intentionally detailed. Some fields correspond to native agent settings, while others make model-selected runtime outcomes deterministic and tunable for simulation. See [Codex behavior and simulation controls](codex-behavior.md) for a source-derived interpretation of each class of knob and the Codex-specific values to write into a profile.
+The surface is intentionally detailed. A few fields correspond to native agent settings, such as the compaction threshold and subagent depth. Most make runtime outcomes that a real agent's model chooses, such as whether a turn calls a tool, deterministic and tunable. Fit them from traces of the workload; the checked-in profiles record where their values come from.
 
 ## Distributions
 
@@ -183,3 +181,116 @@ A tree that reaches a limit is cut short. A plan too large to join still runs wi
 ## Reproducibility
 
 The plan records a resolved-profile SHA-256 digest and, for joined plans, a scenario SHA-256 digest. Given the same binary behavior and config, the same seed produces the same arrival times, top-level session trees, descendant graph, token labels, and samples. Runtime request IDs and measured timing are intentionally run-specific. `session_topology` in `scenario.json` separates configured top-level streams from generated child protocol sessions.
+
+## Defaults
+
+The defaults are starting points for repeatable simulation, not claims that any Claude Code or Codex deployment has these exact distributions. Some are a plausible synthetic baseline, some are deliberately stress-oriented so short runs cover compaction and recursion, and the limits only protect planner memory. `scenario.json.config` and `plan-summary.json.load` record the resolved values of a plan. `fixed(x)`, `uniform(a, b)`, and `log_normal(median, sigma, min, max)` abbreviate the distributions above.
+
+### Identity and seed
+
+| Field | Default | Why |
+|---|---:|---|
+| `schema_version` | Required: `5` | Prevents an older profile from silently acquiring new semantics. Schema 4 profiles fail with a migration message because they carried an `agent` field. |
+| `seed` | `0` | Makes a minimal profile deterministic. Checked-in profiles explicitly use `42` for stable examples. |
+
+### Load defaults
+
+| Field | Default | Why |
+|---|---:|---|
+| `load.num_sessions` | `16` | Keeps the default finite plan small enough for a quick smoke while producing multiple top-level session trees. |
+| `load.concurrent_sessions` | `8` | Exercises closed-loop top-level stream concurrency without treating the default as a production capacity target. |
+| `load.startup_interval_ms` | `0` | Starts the initial top-level population together so concurrency is visible immediately. |
+| `load.restart_delay_ms` | `fixed(0)` | Replaces a completed top-level session tree immediately; users should add measured user/task idle time when modeling an interactive fleet. |
+| `load.duration_minutes` | unset | Streams run until every one of `num_sessions` trees completes. |
+| `load.arrivals` | unset | Streams are the default load. An arrival schedule has no defaults: `bucket_minutes` and one rate list are required, and `interpolation` defaults to `step`. |
+
+These are top-level session streams. Subagents are generated within those session trees and can push live session and request concurrency above `load.concurrent_sessions`.
+
+### Trajectory defaults
+
+| Field | Default | Why |
+|---|---:|---|
+| `trajectory.turns` | `uniform(4, 10)` | Produces multi-turn KV growth without making the smoke plan excessively large. This is a synthetic cap, not a native agent setting. |
+| `trajectory.think_time_ms` | `log_normal(750, 0.8, 25, 15000)` | Represents non-tool continuation or later-user delay with a long tail. Native agents do not insert a fixed hidden-reasoning delay. |
+| `trajectory.output_tokens` | `log_normal(450, 0.9, 16, 4096)` | Provides varied decode work while bounding each synthetic model response. Native harnesses normally do not force this exact output budget. |
+
+### Token-shape defaults
+
+| Field | Default | Why |
+|---|---:|---|
+| `tokens.block_size` | `16` | Matches the common Dynamo replay block granularity and keeps prefix topology compact. Override it to match the target trace or engine contract. |
+| `tokens.system_prefix_tokens` | `fixed(7000)` | A neutral harness instruction surface. Measure the deployed harness version and override; Claude Code and Codex surfaces have been observed near `12000` and `11000`. |
+| `tokens.tool_catalog_tokens` | `fixed(11000)` | A neutral tool-schema surface. Observed harness catalogs range from roughly `9000` (Codex) to `14000` (Claude Code). |
+| `tokens.repository_tokens` | `log_normal(2000, 0.7, 256, 12000)` | Creates a root-tree prefix shared by a parent and all descendants, with a long tail for larger repository context. |
+| `tokens.session_tokens` | `uniform(128, 1024)` | Adds session-specific environment and instruction state after the shared prefixes. |
+| `tokens.user_tokens` | `log_normal(180, 0.9, 16, 4096)` | Models mostly short user turns with occasional large task descriptions. |
+| `tokens.tool_result_tokens` | `log_normal(700, 1.1, 16, 16384)` | Models the parent-visible result appended after a subagent join; the wide tail covers large findings and logs. |
+| `tokens.context_window_tokens` | `128000` | Supplies a broadly useful context-window basis for synthetic compaction. Set it to the deployed model's actual usable window for calibrated runs. |
+
+### Behavior defaults
+
+The action probabilities are sampled once per non-final model turn. They are not fractions of tool calls: one parallel action contributes every call sampled by `tools.parallel_count`.
+
+| Field | Default | Why |
+|---|---:|---|
+| `behavior.tool_probability` | `0.48` | Serial tool phases dominate; a neutral split that keeps total tool-phase mass at `0.56`. |
+| `behavior.parallel_tool_probability` | `0.08` | A small parallel-batch share. Observed harnesses differ widely: Claude Code batches almost never (`0.0`), Codex batches often (`0.19` of turns with the same total tool mass). Override from traces. |
+| `behavior.subagent_probability` | `0.10` | Exercises single-child delegation regularly without dominating the plan. |
+| `behavior.swarm_probability` | `0.025` | Rare multi-child fanout so joins and sibling concurrency appear in short runs. |
+| `behavior.completion_probability` | `0.10` | Lets sessions end before the sampled turn cap once the minimum of two turns is reached. |
+
+The remaining `0.215` becomes a text/user continuation. At the configured maximum subagent depth, delegation probability also falls through to text because another child cannot be created. The sum of the five probabilities must not exceed one.
+
+### Tool defaults
+
+| Field | Default | Why |
+|---|---:|---|
+| `tools.parallel_count` | `uniform(2, 4)` | Covers small batches centered on three calls, the scale seen in Codex command clusters. |
+| `tools.retry_probability` | `0.35` after a failed call | Exercises retry-shaped delay and KV growth without retrying successful calls. Treat it as a synthetic stress value unless traces support it. |
+
+The built-in tool list is a generic cross-harness baseline. Latency distributions use `sigma=0.9`; result-size distributions use `sigma=1.0`.
+
+| Class | Weight | Latency milliseconds | Result tokens | Error probability | Rough role |
+|---|---:|---|---|---:|---|
+| `read` | `0.27` | `log_normal(195, 0.9, 40, 350)` | `log_normal(1064, 1.0, 128, 2000)` | `0.01` | Fast local file reads with moderate returned context. |
+| `search` | `0.21` | `log_normal(490, 0.9, 80, 900)` | `log_normal(2064, 1.0, 128, 4000)` | `0.03` | Repository search with larger and more variable output. |
+| `shell` | `0.21` | `log_normal(1300, 0.9, 100, 2500)` | `log_normal(4032, 1.0, 64, 8000)` | `0.08` | Commands, builds, and tests; an important source of parallel batches. |
+| `patch` | `0.13` | `log_normal(960, 0.9, 120, 1800)` | `log_normal(1532, 1.0, 64, 3000)` | `0.05` | File-edit operations with bounded acknowledgements or diagnostics. |
+| `network` | `0.08` | `log_normal(2650, 0.9, 300, 5000)` | `log_normal(6064, 1.0, 128, 12000)` | `0.10` | Slow, failure-prone remote operations with large results. |
+| `orchestration` | `0.10` | `log_normal(135, 0.9, 20, 250)` | `log_normal(272, 1.0, 32, 512)` | `0.03` | Lightweight spawn, message, wait, and coordination actions. |
+
+Tool class inclusion materially changes time-weighted parallelism. Fit weights and per-class latency from raw tool spans when matching a workload; do not infer time overlap from the action probabilities alone.
+
+### Compaction defaults
+
+| Field | Default | Why |
+|---|---:|---|
+| `compaction.enabled` | `true` | Makes long generated contexts exercise KV-window replacement automatically. |
+| `compaction.trigger_fraction` | `0.78` | Stress-oriented threshold that makes compaction reachable in shorter synthetic runs. The studied Codex source uses a threshold no greater than `0.90`; use that value for a source-aligned Codex profile. |
+| `compaction.summary_input_tokens` | `uniform(256, 1024)` | Models a bounded synthetic summarization instruction. |
+| `compaction.summary_output_tokens` | `uniform(512, 2048)` | Creates a compact retained summary with varied decode and future-prefix cost. |
+| `compaction.retained_recent_tokens` | `8192` | Keeps a meaningful recent tail beside the summary after old context is replaced. |
+| `compaction.abort_probability` | `0.0` | Normal traffic has no injected client-aborted attempt. |
+| `compaction.retry_probability` | `0.0` | Normal traffic has no injected duplicate attempt. |
+| `compaction.max_attempts` | `3` | Bounds fault scenarios when abort or retry injection is explicitly enabled; dormant at the zero probabilities. |
+| `compaction.abort_after_ms` | `fixed(10)` | Supplies a deterministic early-cancel delay only when abort injection is enabled. |
+
+### Subagent defaults
+
+| Field | Default | Why |
+|---|---:|---|
+| `subagents.max_depth` | `2` | Stress-oriented recursion coverage. The studied Codex default permits nesting depth one, so use `1` for that source-aligned workload. |
+| `subagents.turns` | `uniform(2, 5)` | Keeps child trajectories shorter than roots while retaining multi-turn KV growth. |
+| `subagents.fanout` | `uniform(2, 4)` | Models small sibling swarms without exploding the graph. |
+| `subagents.spawn_delay_ms` | `uniform(5, 100)` | Adds lightweight spawn/coordination overhead after the parent model response. |
+| `subagents.blocking_probability` | `0.72` | Makes most delegations feed a parent join while retaining non-blocking parent/child overlap. This is a synthetic coordination baseline, not a native harness knob. |
+
+### Safety defaults
+
+| Field | Default | Why |
+|---|---:|---|
+| `limits.max_nodes` | `10000` | Bounds the number of materialized model-request nodes. |
+| `limits.max_sessions` | `1000` | Bounds roots plus recursively generated child sessions. |
+| `limits.max_total_input_tokens` | `250000000` | Bounds aggregate plan size before HTTP payload construction. |
+
+These are planner memory guards. Runtime HTTP concurrency is separately bounded by `generate --max-in-flight`.

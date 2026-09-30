@@ -5,10 +5,11 @@
 # pauses between prompts. Shape only; run with `--headers claude-code` so the
 # requests also carry Claude Code's headers.
 #
-# Evidence: 496 Claude Code sessions in SWE-chat (tool split and prefix sizes,
-# see docs/codex-behavior.md#empirical-calibration) and their mean of about 86
-# tool calls per session. Human think time and tool latencies are assumptions;
-# fit them to the workload.
+# Evidence: 496 Claude Code sessions in SWE-chat (SALT-NLP/SWE-chat): only 15
+# of 42,784 tool calls ran in parallel batches, the tool split and a 12k system
+# prompt plus 14k tool catalog were observed, and sessions averaged about 86
+# tool calls. Human think time and tool latencies are assumptions; fit them to
+# the workload.
 #
 # The [load] section is a small closed-loop smoke load. Replace it with a
 # [load.arrivals] schedule to model a fleet; see docs/workloads.md.

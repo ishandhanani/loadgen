@@ -5,9 +5,12 @@
 # threads one level deep, and human pauses between prompts. Shape only; run
 # with `--headers codex` so the requests also carry Codex's headers.
 #
-# Evidence: Codex sessions in SWE-chat and the Codex source study (tool split,
-# prefix sizes, compaction threshold, depth; see docs/codex-behavior.md).
-# Session length, human think time, and tool latencies are assumptions.
+# Evidence: Codex sessions in SWE-chat (SALT-NLP/SWE-chat) put 55-65% of tool
+# calls in overlapping batches and showed an 11k system prompt plus 9k tool
+# catalog. The Codex source (codex-rs) compacts at no more than 90% of the
+# context window, allows nesting depth one, and spawns child threads without
+# waiting on them. Session length, human think time, and tool latencies are
+# assumptions.
 #
 # The [load] section is a small closed-loop smoke load. Replace it with a
 # [load.arrivals] schedule to model a fleet; see docs/workloads.md.

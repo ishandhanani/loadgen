@@ -177,4 +177,4 @@ Cache policy remains outside this project.
 | `agent-loadgen-replay` | Token shaping, request transport, harness headers, captured and generated causal schedulers, and run artifacts. |
 | `agent-loadgen` | CLI flags and command wiring only. |
 
-See [Workspace architecture](workspace.md) for the dependency rules and change-routing guide.
+`AGENTS.md` records the dependency rules between the crates.

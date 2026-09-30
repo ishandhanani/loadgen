@@ -13,7 +13,6 @@ Copy the checked-in profile closest to the traffic:
 | `profiles/swe-bench.toml` | A SWE-bench Verified evaluation: 500 tasks on 32 concurrent workers, one prompt then about 36 tool turns, no human, no subagents. |
 | `profiles/diurnal-8h.toml` | The Claude Code shape under an eight-hour hourly request-rate schedule. |
 | `profiles/astra-fleet.toml` | The astra production fleet's agent traffic, fitted to 1.16M requests over 63 days, under its measured day of session starts. |
-| `profiles/balanced.toml`, `profiles/tools-heavy.toml` | Neutral synthetic shapes for exercising the generator. |
 
 Each file states which values come from measured traffic and which are assumptions. [Generator configuration](generator.md) defines every field.
 
