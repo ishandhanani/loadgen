@@ -18,6 +18,7 @@ mod captured;
 mod causal;
 mod clock;
 mod generated;
+mod headers;
 mod request;
 
 pub mod telemetry;
@@ -180,6 +181,8 @@ struct PreparedMetadata {
 }
 
 struct RequestExecution {
+    /// Harness headers rendered for this request.
+    headers: headers::Headers,
     output_budget_tokens: Option<u32>,
     compaction_attempt: Option<GeneratedCompactionAttempt>,
     /// Last request of its protocol session; see `ReplayOptions::dynamo_session_final`.

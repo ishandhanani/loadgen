@@ -12,7 +12,9 @@ use super::request::{
     build_http_client, normalize_target, prepare_open_file_limit, prepare_request, validate_options,
 };
 use super::{PreparedRequest, ReplayOptions, RequestExecution, RunSummary, TrafficKind};
+use crate::headers::{HeaderInput, Headers, render};
 use crate::token_shape::TokenDictionary;
+use agent_loadgen_core::HeaderDialect;
 use agent_loadgen_generate::scenario::{GeneratedScenario, write_plan_graph};
 
 pub async fn run_generated_scenario(
@@ -21,6 +23,7 @@ pub async fn run_generated_scenario(
     options: ReplayOptions,
 ) -> Result<RunSummary> {
     validate_options(&options)?;
+    let headers = generated_headers(scenario, options.header_dialect)?;
     prepare_open_file_limit(options.max_in_flight)?;
     fs::create_dir_all(&options.output_dir).with_context(|| {
         format!(
@@ -39,6 +42,7 @@ pub async fn run_generated_scenario(
     let workload = GeneratedWorkload {
         request_factory: GeneratedRequestFactory {
             scenario,
+            headers,
             dictionary: &dictionary,
             client: client.clone(),
             target: target.clone(),
@@ -94,8 +98,40 @@ impl CausalWorkload for GeneratedWorkload<'_> {
     }
 }
 
+/// Render harness headers for every planned node before dispatch.
+///
+/// A retried tool call aggregates two attempts, so its batch reports no
+/// per-call durations.
+fn generated_headers(scenario: &GeneratedScenario, dialect: HeaderDialect) -> Result<Vec<Headers>> {
+    let requests = scenario
+        .nodes
+        .iter()
+        .map(|node| {
+            let launched_tools = if node.tool_events.iter().any(|tool| tool.retried) {
+                Vec::new()
+            } else {
+                node.tool_events
+                    .iter()
+                    .map(|tool| (tool.class.as_str(), tool.latency_ms))
+                    .collect()
+            };
+            Ok(HeaderInput {
+                context: node
+                    .request
+                    .agent_context
+                    .as_ref()
+                    .context("generated node is missing agent_context")?,
+                dependencies: &node.dependencies,
+                launched_tools,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    render(dialect, &requests)
+}
+
 struct GeneratedRequestFactory<'a> {
     scenario: &'a GeneratedScenario,
+    headers: Vec<Headers>,
     dictionary: &'a TokenDictionary,
     client: reqwest::Client,
     target: String,
@@ -118,6 +154,7 @@ impl GeneratedRequestFactory<'_> {
             self.dictionary,
             node.request.clone(),
             RequestExecution {
+                headers: self.headers[ordinal].clone(),
                 output_budget_tokens: node.output_budget_tokens,
                 compaction_attempt: node.compaction_attempt.clone(),
                 session_final: node.session_final,

@@ -129,14 +129,7 @@ These are planner memory guards. Runtime HTTP concurrency is separately bounded 
 
 ## Header dialects
 
-The dialect is a run-time flag, recorded in `run.json` as `header_dialect`, and is not part of `scenario.json` or the plan digest.
-
-| Dialect | Headers on every request | Extra child-session headers | Compaction label |
-|---|---|---|---|
-| `claude-code` | `x-claude-code-session-id` | `x-claude-code-agent-id`, `x-claude-code-parent-agent-id` | none |
-| `codex` | `thread-id` | `x-codex-parent-thread-id` | `x-codex-turn-metadata` on compaction attempts |
-
-Neither dialect sends `x-dynamo-session-id`; Dynamo maps the harness headers to its session identity itself. `--dynamo-session-final` adds `x-dynamo-session-final: true` to the last request of each session for deployments that consume that Dynamo extension; no harness sends it. All of these header names are reserved and cannot be supplied through `--header`.
+The dialect is a run-time flag, recorded in `run.json` as `header_dialect`, and is not part of `scenario.json` or the plan digest. `claude-code` sends Claude Code's session, subagent, and gateway hint headers; `codex` sends the Codex client's session, thread, window, and turn-metadata headers. Neither sends `x-dynamo-session-id`. See [Harness headers](headers.md) for every header and value.
 
 ## Checked-in profiles
 

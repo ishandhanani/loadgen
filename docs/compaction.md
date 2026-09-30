@@ -57,9 +57,9 @@ An aborted attempt releases its successor after the client cancels its wait. A d
 
 ## Agent metadata
 
-With `--headers codex`, compaction attempts send `x-codex-turn-metadata`. The value contains the request kind and logical compaction metadata. The other dialects, including the default `dynamo`, keep the generic session lineage headers but do not label compaction on the wire, because Dynamo parses compaction metadata only from the Codex header. The plan models compaction identically in every dialect; only the label differs.
+Both dialects label compaction on the wire. With `--headers codex`, every attempt carries `x-codex-turn-metadata` with `request_kind: compaction` and Codex's compaction fields, and the next request advances `x-codex-window-id`. With `--headers claude-code`, every attempt carries `x-claude-code-request-class: compaction` and `x-claude-code-compaction: auto`, and the first root-session request afterwards carries `x-claude-code-context-compacted: auto`. The plan models compaction identically in both dialects. See [Harness headers](headers.md).
 
-Current Dynamo request traces do not project the opaque Codex metadata into `AgentContext`. Captured-trace comparison can still verify the resulting KV topology.
+Dynamo request traces record these headers verbatim in `agent_context.agent_headers`. Captured-trace comparison can also verify the resulting KV topology.
 
 ## Artifacts
 

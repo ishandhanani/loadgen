@@ -423,6 +423,7 @@ mod tests {
             session_id: "thread".to_string(),
             parent_session_id: None,
             compaction: Some(serde_json::json!({"phase": "post_tool"})),
+            agent_headers: Default::default(),
             input_trigger: Some("other".to_string()),
         };
         let mut replay = source.clone();

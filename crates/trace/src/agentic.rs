@@ -516,6 +516,7 @@ mod tests {
                     session_id: session_id.to_string(),
                     parent_session_id: parent_session_id.map(str::to_string),
                     compaction: None,
+                    agent_headers: Default::default(),
                     input_trigger: None,
                 }),
             },
