@@ -36,9 +36,7 @@ target/release/agent-loadgen replay trace.jsonl.gz \
   --model zai-org/GLM-4.7-Flash \
   --target http://127.0.0.1:8000 \
   --output artifacts/replay \
-  --tokenizer /models/GLM-4.7-Flash \
-  --token-path-verified \
-  --engine-cache-mode ownership=session
+  --tokenizer /models/GLM-4.7-Flash
 ```
 
 Captured replay follows Dynamo's agentic policy. Independent roots keep their recorded arrival offsets. Dependent turns wait for actual replay completions plus the delay observed in the source trace.
@@ -89,7 +87,7 @@ It reads dashboard data under `--root`, scans the request-trace object store wit
 - `plan.svg`: Graphviz rendering of `plan.dot` when the `dot` executable is available.
 - `requests.jsonl`: one result per completed request, including timing and output fidelity.
 - `timeline.csv`: requests, failures, root sessions started, request and token rates, and TTFT and latency percentiles per time bucket.
-- `run.json`: run configuration including the header dialect, achieved throughput and latency percentiles, fidelity gates, and pass/fail status.
+- `run.json`: run configuration including the header dialect and HTTP version, achieved throughput and latency percentiles, and pass/fail status: a run passes when every sent request succeeded with its planned output length.
 
 ## Documentation
 
@@ -113,7 +111,7 @@ It reads dashboard data under `--root`, scans the request-trace object store wit
 - Captured requests must have positive input and output token counts.
 - The tool does not generate meaningful prompt text or execute tools.
 - Cache policy and routing behavior remain owned by Dynamo and the inference engine.
-- Capacity or performance conclusions require a verified token path and declared engine cache mode.
+- Synthetic token IDs go through `nvext.token_data`, so the frontend must pass them to the engine unchanged, as Dynamo's Rust chat processor does.
 
 ## License
 

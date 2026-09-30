@@ -19,7 +19,6 @@ while read -r name subcommand args; do
   "$OUT/agent-loadgen" $subcommand $args \
     --model "${LOADGEN_MODEL:?}" --target "$TARGET" --tokenizer /model \
     --output "$OUT/$name" --max-in-flight 4096 \
-    --max-dispatch-p99-ms 100 --max-dispatch-max-ms 2000 \
     > "$OUT/$name/stdout.json" 2> "$OUT/$name/stderr.log"
   echo "=== end $name exit=$? $(date -u +%FT%TZ)"
 done < "$RUNS"

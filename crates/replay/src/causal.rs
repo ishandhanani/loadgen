@@ -17,13 +17,16 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use super::artifacts::{ResultSink, RunAccumulator};
-use super::request::{scaled_offset_ns, send_request, warm_connections};
+use super::request::{scaled_offset_ns, send_request};
 use super::{PreparedRequest, ReplayContext, ReplayOptions, RequestResult, duration_ns};
 use crate::clock::sleep_until;
 use agent_loadgen_core::scheduler::ReadyQueue;
 
 /// Load a chunk this long before it starts, so planning never delays dispatch.
 const LOAD_AHEAD: Duration = Duration::from_secs(2);
+
+/// Time between starting the loop and the first scheduled request.
+const START_DELAY: Duration = Duration::from_millis(100);
 
 /// One request DAG admitted as a unit.
 pub(crate) struct Chunk<P> {
@@ -72,13 +75,11 @@ pub(crate) struct CausalExecution {
 pub(crate) async fn execute_causally<W: CausalWorkload>(
     workload: &mut W,
     client: reqwest::Client,
-    target: &str,
     options: &ReplayOptions,
 ) -> Result<CausalExecution> {
-    warm_connections(&client, target, options).await?;
     let wall_started = Instant::now();
     let base = wall_started
-        .checked_add(options.start_delay)
+        .checked_add(START_DELAY)
         .context("causal replay start delay exceeds the monotonic clock range")?;
     let context = ReplayContext { client, base };
     let semaphore = Arc::new(Semaphore::new(options.max_in_flight));
@@ -91,11 +92,7 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
         scheduled_exhausted: false,
         pending_starts: ReadyQueue::with_capacity(0),
         ready: ReadyQueue::with_capacity(0),
-        sink: ResultSink::create(
-            &options.output_dir.join("requests.jsonl"),
-            options.result_flush_interval,
-            options.max_dispatch_p99_ms,
-        )?,
+        sink: ResultSink::create(&options.output_dir.join("requests.jsonl"))?,
         base,
         time_scale: options.time_scale,
         start_deadline_ns: None,
@@ -198,7 +195,6 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
         }
     }
 
-    scheduler.sink.flush()?;
     if !stopped_early && !scheduler.live.is_empty() {
         bail!(
             "{} graph stalled after {} of {} loaded requests",

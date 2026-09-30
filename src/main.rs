@@ -24,11 +24,7 @@ async fn main() -> Result<()> {
             selection,
             tokens,
         } => {
-            let trace = load_agentic_trace(
-                &trace,
-                selection.max_requests,
-                selection.session_id.as_deref(),
-            )?;
+            let trace = load_agentic_trace(&trace, selection.session_id.as_deref())?;
             let dictionary = TokenDictionary::new(
                 trace.manifest.trace_block_size,
                 trace.manifest.distinct_sequence_hashes,
@@ -52,24 +48,13 @@ async fn main() -> Result<()> {
             output,
             selection,
             tokens,
-            fidelity,
             max_in_flight,
-            warmup_connections,
-            http_transport,
-            result_flush_interval,
-            max_dispatch_p99_ms,
-            max_dispatch_max_ms,
-            start_delay_ms,
             timeout_seconds,
             time_scale,
             static_headers,
             run,
         } => {
-            let trace = load_agentic_trace(
-                &trace,
-                selection.max_requests,
-                selection.session_id.as_deref(),
-            )?;
+            let trace = load_agentic_trace(&trace, selection.session_id.as_deref())?;
             let dictionary = TokenDictionary::new(
                 trace.manifest.trace_block_size,
                 trace.manifest.distinct_sequence_hashes,
@@ -85,19 +70,8 @@ async fn main() -> Result<()> {
                     target,
                     output_dir: output,
                     max_in_flight,
-                    warmup_connections,
-                    http_transport,
-                    result_flush_interval,
-                    max_dispatch_p99_ms,
-                    max_dispatch_max_ms,
-                    start_delay: Duration::from_millis(start_delay_ms),
                     timeout: Duration::from_secs(timeout_seconds),
                     time_scale,
-                    token_path_verified: fidelity.token_path_verified,
-                    engine_cache_mode: parse_key_values(
-                        fidelity.engine_cache_mode,
-                        "engine cache mode",
-                    )?,
                     static_headers: parse_headers(static_headers)?,
                     stop_after: run.stop_after()?,
                 },
@@ -105,7 +79,7 @@ async fn main() -> Result<()> {
             .await?;
             println!("{}", serde_json::to_string_pretty(&summary)?);
             if !summary.passed {
-                bail!("shape-strict replay failed request or dispatch-timing fidelity checks");
+                bail!("some replayed requests failed or missed their recorded output length");
             }
         }
         Command::Plan { config, output } => {
@@ -121,16 +95,8 @@ async fn main() -> Result<()> {
             target,
             output,
             tokens,
-            fidelity,
             max_in_flight,
-            warmup_connections,
-            http_transport,
-            result_flush_interval,
-            max_dispatch_p99_ms,
-            max_dispatch_max_ms,
-            start_delay_ms,
             timeout_seconds,
-            time_scale,
             static_headers,
             run,
         } => {
@@ -147,19 +113,8 @@ async fn main() -> Result<()> {
                     target,
                     output_dir: output,
                     max_in_flight,
-                    warmup_connections,
-                    http_transport,
-                    result_flush_interval,
-                    max_dispatch_p99_ms,
-                    max_dispatch_max_ms,
-                    start_delay: Duration::from_millis(start_delay_ms),
                     timeout: Duration::from_secs(timeout_seconds),
-                    time_scale,
-                    token_path_verified: fidelity.token_path_verified,
-                    engine_cache_mode: parse_key_values(
-                        fidelity.engine_cache_mode,
-                        "engine cache mode",
-                    )?,
+                    time_scale: 1.0,
                     static_headers: parse_headers(static_headers)?,
                     stop_after: run.stop_after()?,
                 },
@@ -167,7 +122,7 @@ async fn main() -> Result<()> {
             .await?;
             println!("{}", serde_json::to_string_pretty(&summary)?);
             if !summary.passed {
-                bail!("generated traffic failed request or dispatch-timing checks");
+                bail!("some generated requests failed or missed their planned output length");
             }
         }
         Command::Serve {
@@ -264,43 +219,4 @@ fn parse_headers(headers: Vec<String>) -> Result<Vec<(String, String)>> {
             Ok((name.to_string(), value.to_string()))
         })
         .collect()
-}
-
-fn parse_key_values(
-    values: Vec<String>,
-    label: &str,
-) -> Result<std::collections::BTreeMap<String, String>> {
-    let mut parsed = std::collections::BTreeMap::new();
-    for value in values {
-        let (name, setting) = value
-            .split_once('=')
-            .with_context(|| format!("{label} {value:?} must use NAME=VALUE"))?;
-        if name.is_empty() || setting.is_empty() {
-            bail!("{label} names and values must not be empty");
-        }
-        if parsed
-            .insert(name.to_string(), setting.to_string())
-            .is_some()
-        {
-            bail!("{label} {name:?} is declared more than once");
-        }
-    }
-    Ok(parsed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cache_mode_rejects_duplicate_keys() {
-        let result = parse_key_values(
-            vec![
-                "ownership=session".to_string(),
-                "ownership=shared".to_string(),
-            ],
-            "engine cache mode",
-        );
-        assert!(result.is_err());
-    }
 }

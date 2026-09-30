@@ -150,7 +150,7 @@ Frontend-observed arrival is different from client dispatch. A Dynamo request tr
 
 ## Artifacts and claims
 
-`run.json` labels the protocol surface, traffic kind, token-path verification, and declared engine cache mode, and reports achieved throughput with TTFT, request latency, and time-per-output-token percentiles. `timeline.csv` breaks the same measurements into fixed time buckets. Capacity or performance conclusions are blocked unless token IDs are verified to reach the engine unchanged and cache mode is declared.
+`run.json` labels the protocol surface, traffic kind, and HTTP version, and reports achieved throughput with TTFT, request latency, and time-per-output-token percentiles. `timeline.csv` breaks the same measurements into one-minute buckets. A run passes when every sent request succeeded with its planned output length; client dispatch lag is reported, not gated.
 
 Cache policy remains outside this project.
 

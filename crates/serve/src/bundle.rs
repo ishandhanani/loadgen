@@ -448,7 +448,7 @@ pub fn merge_scans(scans: Vec<ShardScan>) -> MergedBundle {
 /// Compile the bundle the way `agent-loadgen inspect` does, with an unverified
 /// synthetic token range so no tokenizer is needed.
 pub fn inspect_bundle(path: &Path) -> Result<serde_json::Value> {
-    let trace = load_agentic_trace(&[path.to_path_buf()], None, None)?;
+    let trace = load_agentic_trace(&[path.to_path_buf()], None)?;
     let alphabet = SafeTokenAlphabet::load(
         TokenAlphabetSource::UnverifiedRange {
             start: UNVERIFIED_TOKEN_START,

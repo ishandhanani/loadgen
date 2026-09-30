@@ -29,7 +29,7 @@ publish = false
 [dependencies]
 agent-loadgen-core = { version = "0.1.0", path = "crates/core", features = ["clap"] }
 agent-loadgen-generate = { version = "0.1.0", path = "crates/generate" }
-agent-loadgen-replay = { version = "0.1.0", path = "crates/replay", features = ["clap"] }
+agent-loadgen-replay = { version = "0.1.0", path = "crates/replay" }
 agent-loadgen-serve = { version = "0.1.0", path = "crates/serve" }
 agent-loadgen-trace = { version = "0.1.0", path = "crates/trace" }
 anyhow = "1"

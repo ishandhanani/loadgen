@@ -40,15 +40,6 @@ fn calculates_nearest_rank_percentiles() {
 }
 
 #[test]
-fn hard_dispatch_limit_uses_the_unrounded_maximum() {
-    let mut accumulator = RunAccumulator::new(10.0).unwrap();
-    accumulator.request_count = 1;
-    accumulator.dispatch_at_or_below_p99_limit = 1;
-    accumulator.dispatch_max_ms = 5.000_4;
-    assert!(!dispatch_timing_matches(&accumulator, 5.0));
-}
-
-#[test]
 fn detects_output_chunks() {
     assert!(!chunk_contains_output(
         &json!({"choices":[{"delta":{"role":"assistant"}}]})
@@ -169,16 +160,8 @@ async fn replay_sends_shape_and_agent_headers() {
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
             max_in_flight: 1,
-            warmup_connections: 0,
-            http_transport: HttpTransport::Http2PriorKnowledge,
-            result_flush_interval: 1,
-            max_dispatch_p99_ms: 100.0,
-            max_dispatch_max_ms: 100.0,
-            start_delay: Duration::from_millis(5),
             timeout: Duration::from_secs(5),
             time_scale: 1.0,
-            token_path_verified: false,
-            engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
             stop_after: None,
         },
@@ -300,16 +283,8 @@ async fn recorded_scheduler_handles_tied_millisecond_arrivals() {
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
             max_in_flight: 96,
-            warmup_connections: 0,
-            http_transport: HttpTransport::Auto,
-            result_flush_interval: 1,
-            max_dispatch_p99_ms: 100.0,
-            max_dispatch_max_ms: 100.0,
-            start_delay: Duration::from_millis(25),
             timeout: Duration::from_secs(5),
             time_scale: 1.0,
-            token_path_verified: false,
-            engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
             stop_after: None,
         },
@@ -409,16 +384,8 @@ async fn captured_successor_waits_for_actual_completion_plus_recorded_gap() {
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
             max_in_flight: 2,
-            warmup_connections: 0,
-            http_transport: HttpTransport::Auto,
-            result_flush_interval: 1,
-            max_dispatch_p99_ms: 100.0,
-            max_dispatch_max_ms: 100.0,
-            start_delay: Duration::from_millis(5),
             timeout: Duration::from_secs(5),
             time_scale: 1.0,
-            token_path_verified: false,
-            engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
             stop_after: None,
         },
@@ -500,16 +467,8 @@ async fn generated_graph_releases_tool_successor_after_completion() {
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
             max_in_flight: 2,
-            warmup_connections: 0,
-            http_transport: HttpTransport::Auto,
-            result_flush_interval: 1,
-            max_dispatch_p99_ms: 100.0,
-            max_dispatch_max_ms: 100.0,
-            start_delay: Duration::from_millis(5),
             timeout: Duration::from_secs(5),
             time_scale: 100.0,
-            token_path_verified: false,
-            engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
             stop_after: None,
         },
@@ -609,16 +568,8 @@ async fn generated_claude_headers_reach_the_wire() {
             target,
             output_dir: output.path().to_path_buf(),
             max_in_flight: 2,
-            warmup_connections: 0,
-            http_transport: HttpTransport::Auto,
-            result_flush_interval: 1,
-            max_dispatch_p99_ms: 1000.0,
-            max_dispatch_max_ms: 1000.0,
-            start_delay: Duration::ZERO,
             timeout: Duration::from_secs(5),
             time_scale: 100.0,
-            token_path_verified: false,
-            engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
             stop_after: None,
         },
@@ -658,16 +609,8 @@ fn harness_headers_cannot_be_overridden_with_static_headers() {
         target: "http://localhost:8000".to_string(),
         output_dir: std::path::PathBuf::from("unused"),
         max_in_flight: 1,
-        warmup_connections: 0,
-        http_transport: HttpTransport::Auto,
-        result_flush_interval: 1,
-        max_dispatch_p99_ms: 1.0,
-        max_dispatch_max_ms: 1.0,
-        start_delay: Duration::ZERO,
         timeout: Duration::from_secs(1),
         time_scale: 1.0,
-        token_path_verified: false,
-        engine_cache_mode: BTreeMap::new(),
         static_headers: Vec::new(),
         stop_after: None,
     };
@@ -696,16 +639,8 @@ fn quick_options(target: String, output: &std::path::Path, time_scale: f64) -> R
         target,
         output_dir: output.to_path_buf(),
         max_in_flight: 64,
-        warmup_connections: 0,
-        http_transport: HttpTransport::Auto,
-        result_flush_interval: 64,
-        max_dispatch_p99_ms: 1000.0,
-        max_dispatch_max_ms: 1000.0,
-        start_delay: Duration::ZERO,
         timeout: Duration::from_secs(5),
         time_scale,
-        token_path_verified: false,
-        engine_cache_mode: BTreeMap::new(),
         static_headers: Vec::new(),
         stop_after: None,
     }
@@ -836,5 +771,50 @@ async fn stop_after_ends_a_long_run_with_the_requests_it_sent() {
     assert_eq!(summary.request_count, capture.0.lock().unwrap().len());
     assert!(summary.passed);
     assert!(summary.total_time_ms < 5_000.0);
+    server.abort();
+}
+
+#[tokio::test]
+async fn connect_prefers_h2c_and_falls_back_to_http1() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // axum speaks HTTP/2 without TLS, as Dynamo's frontend does.
+    let app = Router::new().route("/v1/models", axum::routing::get(|| async { "{}" }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let output = tempdir().unwrap();
+    let options = quick_options(target.clone(), output.path(), 1.0);
+    let (_, version) = super::request::connect(&options, &normalize_target(&target))
+        .await
+        .unwrap();
+    assert_eq!(version, "h2c");
+    server.abort();
+
+    // A server that speaks only HTTP/1.1 drops the HTTP/2 preface.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut buffer = vec![0; 4096];
+                let read = socket.read(&mut buffer).await.unwrap_or(0);
+                if !buffer[..read].starts_with(b"PRI * HTTP/2.0") {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+                        )
+                        .await
+                        .ok();
+                }
+            });
+        }
+    });
+    let options = quick_options(target.clone(), output.path(), 1.0);
+    let (_, version) = super::request::connect(&options, &normalize_target(&target))
+        .await
+        .unwrap();
+    assert_eq!(version, "http/1.1");
     server.abort();
 }

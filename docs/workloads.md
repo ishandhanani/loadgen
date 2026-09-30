@@ -92,7 +92,8 @@ Generation plans each session tree shortly before it starts and drops it when it
 - `--stop-after-minutes N` stops sending after N minutes, lets in-flight requests finish, and reports the requests that were sent. Use it to cut the tail of sessions still running after a schedule ends, or to fit a run into a time slot.
 - Each run mixes a fresh salt into session content after the shared prefix, so a second run of the same profile does not hit KV cached by the first; the synthetic system prompt and tool catalog stay identical across runs, as they would for a real harness.
 - Generated session IDs on the wire are UUIDs unique to the run.
-- `--time-scale` divides every client delay and arrival offset. It plays a schedule faster and also raises the arrival rate. To see a whole day in less time at its real load level, shrink `bucket_minutes` instead.
+- The target can be `http://` or `https://`. Plain HTTP tries HTTP/2 first, which Dynamo's frontend speaks, and falls back to HTTP/1.1; `run.json` records the version used. Pass credentials with `--header Authorization="Bearer <token>"`.
+- To see a whole day in less time at its real load level, shrink `bucket_minutes`.
 
 ## 5. Read the results
 

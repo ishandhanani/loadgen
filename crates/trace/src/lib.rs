@@ -183,19 +183,11 @@ pub(crate) struct LoadedTrace {
     pub(crate) manifest: TraceManifest,
 }
 
-pub fn load_agentic_trace(
-    paths: &[PathBuf],
-    max_requests: Option<usize>,
-    session_id: Option<&str>,
-) -> Result<AgenticTrace> {
-    agentic::lower(load_trace(paths, max_requests, session_id)?)
+pub fn load_agentic_trace(paths: &[PathBuf], session_id: Option<&str>) -> Result<AgenticTrace> {
+    agentic::lower(load_trace(paths, session_id)?)
 }
 
-pub(crate) fn load_trace(
-    paths: &[PathBuf],
-    max_requests: Option<usize>,
-    session_id: Option<&str>,
-) -> Result<LoadedTrace> {
+pub(crate) fn load_trace(paths: &[PathBuf], session_id: Option<&str>) -> Result<LoadedTrace> {
     if paths.is_empty() {
         bail!("at least one trace path is required");
     }
@@ -256,9 +248,6 @@ pub(crate) fn load_trace(
         if requests.is_empty() {
             bail!("the trace contains no requests for session {session_id:?}");
         }
-    }
-    if let Some(limit) = max_requests {
-        requests.truncate(limit);
     }
     if requests.is_empty() {
         bail!("the selected trace contains no requests");
@@ -581,7 +570,7 @@ mod tests {
         )
         .unwrap();
 
-        let trace = load_agentic_trace(&[file.path().to_path_buf()], None, None).unwrap();
+        let trace = load_agentic_trace(&[file.path().to_path_buf()], None).unwrap();
         assert_eq!(trace.turns.len(), 2);
         assert!(trace.turns[0].dependencies.is_empty());
         assert_eq!(trace.turns[0].root_arrival_ms, Some(0));
@@ -596,7 +585,7 @@ mod tests {
         record.as_object_mut().unwrap().remove("agent_context");
         writeln!(file, "{record}").unwrap();
 
-        let error = load_agentic_trace(&[file.path().to_path_buf()], None, None).unwrap_err();
+        let error = load_agentic_trace(&[file.path().to_path_buf()], None).unwrap_err();
         assert!(error.to_string().contains("requires agent_context"));
     }
 
@@ -613,7 +602,7 @@ mod tests {
         record.as_object_mut().unwrap().remove("agent_context");
         writeln!(file, "{record}").unwrap();
 
-        let error = load_agentic_trace(&[file.path().to_path_buf()], None, None).unwrap_err();
+        let error = load_agentic_trace(&[file.path().to_path_buf()], None).unwrap_err();
         assert!(error.to_string().contains("requires agent_context"));
     }
 
@@ -633,12 +622,12 @@ mod tests {
         )
         .unwrap();
 
-        let error = load_agentic_trace(&[file.path().to_path_buf()], None, None).unwrap_err();
+        let error = load_agentic_trace(&[file.path().to_path_buf()], None).unwrap_err();
         assert!(format!("{error:#}").contains("duplicate request_id duplicate"));
     }
 
     #[test]
-    fn loads_wrapped_records_and_sorts_before_limit() {
+    fn loads_wrapped_records_in_arrival_order() {
         let mut file = NamedTempFile::new().unwrap();
         let late = request_record("late", "thread-1", 1_200, 1_300, &[22]);
         let early = request_record("early", "thread-1", 1_000, 1_100, &[11]);
@@ -655,9 +644,13 @@ mod tests {
         )
         .unwrap();
 
-        let trace = load_agentic_trace(&[file.path().to_path_buf()], Some(1), None).unwrap();
-        assert_eq!(trace.turns.len(), 1);
-        assert_eq!(trace.turns[0].request.source_request_id, "early");
+        let trace = load_agentic_trace(&[file.path().to_path_buf()], None).unwrap();
+        let order = trace
+            .turns
+            .iter()
+            .map(|turn| turn.request.source_request_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(order, ["early", "late"]);
     }
 
     #[test]

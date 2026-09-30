@@ -8,15 +8,11 @@ description = "Causal replay runtime and transport for agent-loadgen"
 repository.workspace = true
 publish = false
 
-[features]
-clap = ["dep:clap"]
-
 [dependencies]
 agent-loadgen-core = { version = "0.1.0", path = "../core" }
 agent-loadgen-generate = { version = "0.1.0", path = "../generate" }
 agent-loadgen-trace = { version = "0.1.0", path = "../trace" }
 anyhow = "1"
-clap = { version = "4.5", features = ["derive"], optional = true }
 futures-util = "0.3"
 hdrhistogram = "7"
 hf-hub = { version = "0.4.2", default-features = false, features = ["rustls-tls", "ureq"] }
@@ -33,5 +29,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 axum = "0.8"
+tokio = { version = "1", features = ["io-util"] }
 tempfile = "3"
 toml = "0.9"

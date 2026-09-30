@@ -8,11 +8,10 @@ use futures_util::StreamExt;
 use reqwest::header::{HeaderName, HeaderValue};
 use serde_json::json;
 use tokio::sync::OwnedSemaphorePermit;
-use tokio::task::JoinSet;
 
 use super::{
-    HttpTransport, PreparedMetadata, PreparedRequest, ReplayContext, ReplayOptions,
-    RequestExecution, RequestResult, millis,
+    PreparedMetadata, PreparedRequest, ReplayContext, ReplayOptions, RequestExecution,
+    RequestResult, millis,
 };
 use crate::headers::is_managed_header;
 use crate::token_shape::TokenDictionary;
@@ -96,50 +95,68 @@ pub(super) fn scaled_offset_ns(offset_ms: u64, time_scale: f64) -> Result<u64> {
     Ok(scaled.round_ties_even() as u64)
 }
 
-pub(super) async fn warm_connections(
+/// Build the HTTP client and open its first connection with `GET /v1/models`.
+///
+/// Dynamo's frontend speaks HTTP/2 without TLS, which carries a large load
+/// over few connections, so an `http://` target is tried with HTTP/2 prior
+/// knowledge first and falls back to HTTP/1.1 when the server does not speak
+/// it. An `https://` target negotiates the version during the TLS handshake.
+/// Returns the client and the HTTP version it used.
+pub(super) async fn connect(
+    options: &ReplayOptions,
+    target: &str,
+) -> Result<(reqwest::Client, &'static str)> {
+    let builder = || {
+        reqwest::Client::builder()
+            .connect_timeout(options.timeout.min(Duration::from_secs(30)))
+            .timeout(options.timeout)
+            .pool_max_idle_per_host(options.max_in_flight)
+    };
+    if target.starts_with("http://") {
+        let client = builder()
+            .http2_prior_knowledge()
+            .build()
+            .context("failed to build the HTTP client")?;
+        if first_request(&client, target, options).await.is_ok() {
+            return Ok((client, "h2c"));
+        }
+    }
+    let client = builder()
+        .build()
+        .context("failed to build the HTTP client")?;
+    let version = first_request(&client, target, options).await?;
+    Ok((
+        client,
+        if version == reqwest::Version::HTTP_2 {
+            "h2"
+        } else {
+            "http/1.1"
+        },
+    ))
+}
+
+async fn first_request(
     client: &reqwest::Client,
     target: &str,
     options: &ReplayOptions,
-) -> Result<()> {
-    if options.warmup_connections == 0 {
-        return Ok(());
-    }
+) -> Result<reqwest::Version> {
     let models_target = target
         .strip_suffix("/v1/chat/completions")
         .map_or_else(|| target.to_string(), |base| format!("{base}/v1/models"));
-    let mut tasks = JoinSet::new();
-    for _ in 0..options.warmup_connections {
-        let client = client.clone();
-        let target = models_target.clone();
-        let headers = options.static_headers.clone();
-        tasks.spawn(async move {
-            let mut request = client.get(target);
-            for (name, value) in headers {
-                request = request.header(name, value);
-            }
-            let response = request.send().await.context("connection warmup failed")?;
-            response
-                .bytes()
-                .await
-                .context("failed to drain a connection warmup response")?;
-            Ok::<(), anyhow::Error>(())
-        });
+    let mut request = client.get(&models_target);
+    for (name, value) in &options.static_headers {
+        request = request.header(name, value);
     }
-    while let Some(result) = tasks.join_next().await {
-        result.context("a connection warmup task failed")??;
-    }
-    Ok(())
-}
-
-pub(super) fn build_http_client(options: &ReplayOptions) -> Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(options.timeout.min(Duration::from_secs(30)))
-        .timeout(options.timeout)
-        .pool_max_idle_per_host(options.max_in_flight);
-    if matches!(options.http_transport, HttpTransport::Http2PriorKnowledge) {
-        builder = builder.http2_prior_knowledge();
-    }
-    builder.build().context("failed to build the HTTP client")
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("failed to connect to {models_target}"))?;
+    let version = response.version();
+    response
+        .bytes()
+        .await
+        .context("failed to read the first response")?;
+    Ok(version)
 }
 
 pub(super) fn validate_options(options: &ReplayOptions) -> Result<()> {
@@ -149,20 +166,8 @@ pub(super) fn validate_options(options: &ReplayOptions) -> Result<()> {
     if options.max_in_flight == 0 {
         bail!("max_in_flight must be greater than zero");
     }
-    if options.warmup_connections > options.max_in_flight {
-        bail!("warmup_connections must not exceed max_in_flight");
-    }
-    if options.result_flush_interval == 0 {
-        bail!("result_flush_interval must be greater than zero");
-    }
     if !options.time_scale.is_finite() || options.time_scale <= 0.0 {
         bail!("time_scale must be a positive finite number");
-    }
-    if !options.max_dispatch_p99_ms.is_finite() || options.max_dispatch_p99_ms < 0.0 {
-        bail!("max_dispatch_p99_ms must be a non-negative finite number");
-    }
-    if !options.max_dispatch_max_ms.is_finite() || options.max_dispatch_max_ms < 0.0 {
-        bail!("max_dispatch_max_ms must be a non-negative finite number");
     }
     for (name, value) in &options.static_headers {
         if is_managed_header(name) {

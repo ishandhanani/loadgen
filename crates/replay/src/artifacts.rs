@@ -21,27 +21,21 @@ use agent_loadgen_generate::scenario::CompactionExpectedEffect;
 /// Width of each `timeline.csv` row.
 const TIMELINE_BUCKET_MS: f64 = 60_000.0;
 
+/// Writes `requests.jsonl` one flushed line per completed request, so a
+/// running load can be followed from the file.
 pub(super) struct ResultSink {
     writer: BufWriter<File>,
-    flush_interval: usize,
-    records_since_flush: usize,
     pub(super) accumulator: RunAccumulator,
 }
 
 impl ResultSink {
-    pub(super) fn create(
-        path: &Path,
-        flush_interval: usize,
-        dispatch_p99_limit_ms: f64,
-    ) -> Result<Self> {
+    pub(super) fn create(path: &Path) -> Result<Self> {
         let writer = BufWriter::new(
             File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
         );
         Ok(Self {
             writer,
-            flush_interval,
-            records_since_flush: 0,
-            accumulator: RunAccumulator::new(dispatch_p99_limit_ms)?,
+            accumulator: RunAccumulator::new()?,
         })
     }
 
@@ -50,16 +44,7 @@ impl ResultSink {
         serde_json::to_writer(&mut self.writer, &result)
             .context("failed to write request result")?;
         self.writer.write_all(b"\n")?;
-        self.records_since_flush += 1;
-        if self.records_since_flush >= self.flush_interval {
-            self.flush()?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn flush(&mut self) -> Result<()> {
         self.writer.flush()?;
-        self.records_since_flush = 0;
         Ok(())
     }
 }
@@ -78,9 +63,6 @@ pub(super) struct RunAccumulator {
     scheduler_wake_lag_us: Histogram<u64>,
     dispatch_lag_us: Histogram<u64>,
     local_admission_lag_us: Histogram<u64>,
-    dispatch_p99_limit_ms: f64,
-    pub(super) dispatch_at_or_below_p99_limit: usize,
-    pub(super) dispatch_max_ms: f64,
     ttft_us: Histogram<u64>,
     latency_us: Histogram<u64>,
     tpot_us: Histogram<u64>,
@@ -104,7 +86,7 @@ struct TimelineBucket {
 }
 
 impl RunAccumulator {
-    pub(super) fn new(dispatch_p99_limit_ms: f64) -> Result<Self> {
+    pub(super) fn new() -> Result<Self> {
         Ok(Self {
             request_count: 0,
             succeeded: 0,
@@ -119,9 +101,6 @@ impl RunAccumulator {
             scheduler_wake_lag_us: Histogram::new(3)?,
             dispatch_lag_us: Histogram::new(3)?,
             local_admission_lag_us: Histogram::new(3)?,
-            dispatch_p99_limit_ms,
-            dispatch_at_or_below_p99_limit: 0,
-            dispatch_max_ms: 0.0,
             ttft_us: Histogram::new(3)?,
             latency_us: Histogram::new(3)?,
             tpot_us: Histogram::new(3)?,
@@ -167,10 +146,6 @@ impl RunAccumulator {
             &mut self.local_admission_lag_us,
             result.local_admission_lag_ms,
         )?;
-        if result.dispatch_lag_ms <= self.dispatch_p99_limit_ms {
-            self.dispatch_at_or_below_p99_limit += 1;
-        }
-        self.dispatch_max_ms = self.dispatch_max_ms.max(result.dispatch_lag_ms);
         Ok(())
     }
 }
@@ -310,6 +285,7 @@ pub(super) struct SummaryIdentity<'a> {
     pub(super) traffic_kind: TrafficKind,
     pub(super) run_id: String,
     pub(super) target: &'a str,
+    pub(super) http_version: &'static str,
 }
 
 pub(super) fn summarize(
@@ -322,27 +298,14 @@ pub(super) fn summarize(
     stopped_early: bool,
 ) -> RunSummary {
     let scheduler_wake_lag_ms = histogram_percentiles(&accumulator.scheduler_wake_lag_us);
-    let mut dispatch_lag_ms = histogram_percentiles(&accumulator.dispatch_lag_us);
-    // Histograms are microsecond-quantized. Preserve the exact maximum so a
-    // value just over the configured hard limit cannot round down and pass.
-    dispatch_lag_ms.max = accumulator.dispatch_max_ms;
+    let dispatch_lag_ms = histogram_percentiles(&accumulator.dispatch_lag_us);
     let local_admission_lag_ms = histogram_percentiles(&accumulator.local_admission_lag_us);
     // A run stopped by `stop_after` is judged on the requests it sent.
-    let request_fidelity_matches = (stopped_early
-        || accumulator.request_count == source.request_count)
+    let passed = (stopped_early || accumulator.request_count == source.request_count)
         && accumulator.succeeded == accumulator.request_count
         && accumulator.output_length_matches == accumulator.budgeted_requests
         && accumulator.missing_output_usage == 0
         && accumulator.planned_abort_matches == accumulator.planned_aborts;
-    let dispatch_timing_matches = dispatch_timing_matches(accumulator, options.max_dispatch_max_ms);
-    let passed = request_fidelity_matches && dispatch_timing_matches;
-    let mut conclusion_blockers = Vec::new();
-    if !options.token_path_verified {
-        conclusion_blockers.push("token_path_unverified".to_string());
-    }
-    if options.engine_cache_mode.is_empty() {
-        conclusion_blockers.push("engine_cache_mode_undeclared".to_string());
-    }
     RunSummary {
         run_id: identity.run_id,
         header_dialect: options.header_dialect,
@@ -351,11 +314,7 @@ pub(super) fn summarize(
         target: identity.target.to_string(),
         time_scale: options.time_scale,
         max_in_flight: options.max_in_flight,
-        warmup_connections: options.warmup_connections,
-        http_transport: options.http_transport,
-        result_flush_interval: options.result_flush_interval,
-        max_dispatch_p99_ms: options.max_dispatch_p99_ms,
-        max_dispatch_max_ms: options.max_dispatch_max_ms,
+        http_version: identity.http_version,
         timer_backend: TIMER_BACKEND,
         static_header_names: options
             .static_headers
@@ -365,10 +324,6 @@ pub(super) fn summarize(
         protocol_surface: "chat_completions",
         traffic_kind: identity.traffic_kind,
         scheduling_model: identity.traffic_kind.scheduling_model(),
-        token_path_verified: options.token_path_verified,
-        engine_cache_mode: options.engine_cache_mode.clone(),
-        capacity_performance_conclusions_allowed: conclusion_blockers.is_empty(),
-        conclusion_blockers,
         source: source.clone(),
         session_topology: None,
         token_dictionary: dictionary.clone(),
@@ -388,18 +343,9 @@ pub(super) fn summarize(
         local_admission_lag_ms,
         performance: accumulator.performance(elapsed),
         stopped_early,
-        request_fidelity_matches,
-        dispatch_timing_matches,
         passed,
         total_time_ms: millis(elapsed),
     }
-}
-
-pub(super) fn dispatch_timing_matches(accumulator: &RunAccumulator, max_limit_ms: f64) -> bool {
-    let p99_rank = usize::try_from((accumulator.request_count as u128 * 99).div_ceil(100))
-        .unwrap_or(usize::MAX);
-    accumulator.dispatch_at_or_below_p99_limit >= p99_rank
-        && accumulator.dispatch_max_ms <= max_limit_ms
 }
 
 pub(super) fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {

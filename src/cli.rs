@@ -4,9 +4,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use agent_loadgen_core::HeaderDialect;
-use agent_loadgen_replay::HttpTransport;
 use agent_loadgen_replay::token_shape::{SafeTokenAlphabet, TokenAlphabetSource};
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -18,77 +17,24 @@ pub struct Cli {
 
 #[derive(Debug, Args)]
 pub struct TokenArgs {
-    /// Local tokenizer file/directory or Hugging Face model ID.
+    /// Tokenizer of the served model: a Hugging Face model ID, or a local
+    /// tokenizer.json or model directory. Synthetic prompts use only its
+    /// ordinary (non-special) token IDs.
     #[arg(long)]
-    pub tokenizer: Option<String>,
-
-    /// First ID in a caller-certified manual token range.
-    #[arg(long)]
-    pub token_start: Option<u32>,
-
-    /// Maximum number of safe token IDs to use.
-    #[arg(long, default_value_t = 1024)]
-    pub token_alphabet_size: usize,
-
-    /// Exclude one token ID. Repeat this option for more IDs.
-    #[arg(long = "exclude-token-id")]
-    pub excluded_token_ids: Vec<u32>,
-
-    /// Accept a manual token range that the load generator cannot verify.
-    #[arg(long)]
-    pub allow_unverified_token_range: bool,
+    pub tokenizer: String,
 }
 
 impl TokenArgs {
     pub fn load(self) -> Result<SafeTokenAlphabet> {
-        let source = match (self.tokenizer, self.token_start) {
-            (Some(tokenizer), None) => {
-                if self.allow_unverified_token_range {
-                    bail!("--allow-unverified-token-range requires --token-start");
-                }
-                TokenAlphabetSource::Tokenizer(tokenizer)
-            }
-            (None, Some(start)) => {
-                if !self.allow_unverified_token_range {
-                    bail!(
-                        "--token-start requires --allow-unverified-token-range; use --tokenizer for verified token safety"
-                    );
-                }
-                TokenAlphabetSource::UnverifiedRange {
-                    start,
-                    size: u32::try_from(self.token_alphabet_size)
-                        .context("--token-alphabet-size does not fit u32")?,
-                }
-            }
-            (Some(_), Some(_)) => bail!("use either --tokenizer or --token-start, not both"),
-            (None, None) => bail!(
-                "--tokenizer is required for verified token safety; a manual range requires --token-start and --allow-unverified-token-range"
-            ),
-        };
-        SafeTokenAlphabet::load(source, self.token_alphabet_size, &self.excluded_token_ids)
+        SafeTokenAlphabet::load(TokenAlphabetSource::Tokenizer(self.tokenizer), 1024, &[])
     }
 }
 
 #[derive(Debug, Args)]
 pub struct TraceSelectionArgs {
-    /// Keep only this many earliest model requests.
-    #[arg(long)]
-    pub max_requests: Option<usize>,
-
     /// Replay one session in isolation.
     #[arg(long)]
     pub session_id: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub struct FidelityArgs {
-    /// Declare that supplied token IDs reach the engine without re-tokenization.
-    #[arg(long)]
-    pub token_path_verified: bool,
-
-    /// Declare one engine cache setting as NAME=VALUE. Repeat for more settings.
-    #[arg(long = "engine-cache-mode")]
-    pub engine_cache_mode: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -160,36 +106,9 @@ pub enum Command {
         #[command(flatten)]
         tokens: TokenArgs,
 
-        #[command(flatten)]
-        fidelity: FidelityArgs,
-
         /// Maximum simultaneous HTTP requests.
         #[arg(long, default_value_t = 4096)]
         max_in_flight: usize,
-
-        /// Number of idle HTTP connections prepared through /v1/models before replay.
-        #[arg(long, default_value_t = 1)]
-        warmup_connections: usize,
-
-        /// HTTP transport used for target requests.
-        #[arg(long, value_enum, default_value_t = HttpTransport::Http2PriorKnowledge)]
-        http_transport: HttpTransport,
-
-        /// Flush requests.jsonl after this many completed requests.
-        #[arg(long, default_value_t = 1)]
-        result_flush_interval: usize,
-
-        /// Maximum allowed p99 client-offer lag.
-        #[arg(long, default_value_t = 2.0)]
-        max_dispatch_p99_ms: f64,
-
-        /// Maximum allowed client-offer lag.
-        #[arg(long, default_value_t = 5.0)]
-        max_dispatch_max_ms: f64,
-
-        /// Delay before the first scheduled request.
-        #[arg(long, default_value_t = 100)]
-        start_delay_ms: u64,
 
         /// Per-request HTTP timeout.
         #[arg(long, default_value_t = 600)]
@@ -250,44 +169,13 @@ pub enum Command {
         #[command(flatten)]
         tokens: TokenArgs,
 
-        #[command(flatten)]
-        fidelity: FidelityArgs,
-
         /// Maximum simultaneous HTTP requests.
         #[arg(long, default_value_t = 256)]
         max_in_flight: usize,
 
-        /// Number of idle HTTP connections prepared through /v1/models.
-        #[arg(long, default_value_t = 1)]
-        warmup_connections: usize,
-
-        /// HTTP transport used for target requests.
-        #[arg(long, value_enum, default_value_t = HttpTransport::Http2PriorKnowledge)]
-        http_transport: HttpTransport,
-
-        /// Flush requests.jsonl after this many completed requests.
-        #[arg(long, default_value_t = 1)]
-        result_flush_interval: usize,
-
-        /// Maximum allowed p99 dispatch lag after a graph node becomes ready.
-        #[arg(long, default_value_t = 10.0)]
-        max_dispatch_p99_ms: f64,
-
-        /// Maximum allowed dispatch lag after a graph node becomes ready.
-        #[arg(long, default_value_t = 50.0)]
-        max_dispatch_max_ms: f64,
-
-        /// Delay before the first top-level session tree starts.
-        #[arg(long, default_value_t = 100)]
-        start_delay_ms: u64,
-
         /// Per-request HTTP timeout.
         #[arg(long, default_value_t = 600)]
         timeout_seconds: u64,
-
-        /// Divide startup, restart, tool, think, and join delays by this value.
-        #[arg(long, default_value_t = 1.0)]
-        time_scale: f64,
 
         /// Add a static target header as NAME=VALUE. Repeat the flag for more headers.
         #[arg(long = "header")]
