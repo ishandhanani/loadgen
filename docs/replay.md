@@ -86,6 +86,8 @@ target/release/agent-loadgen replay trace.jsonl.gz \
 
 `--headers {claude-code|codex}` is required and selects the harness whose session, subagent, and compaction headers each request carries. When the trace recorded that harness's headers in `agent_context.agent_headers`, replay sends them verbatim; otherwise it derives them from the captured lineage. `--dynamo-session-final` additionally marks the last request of each captured session with `x-dynamo-session-final: true`. The dialect does not change which requests are sent or when. See [Harness headers](headers.md).
 
+Replay mixes a per-run `--token-salt` into every block's token content, keeping the trace's prefix sharing exact while preventing a repeated replay from reusing KV cached by an earlier one; `--token-salt 0` sends the codewords of the recorded hashes. `--stop-after-minutes` ends a replay at a deadline and reports the requests it sent. `timeline.csv` and `run.json.performance` report achieved throughput and latency.
+
 `inspect` reports root count and dependency-edge count in addition to shape statistics. `run.json` labels captured runs with `scheduling_model: agentic_causal` and records the `header_dialect`.
 
 ## Compare a captured replay

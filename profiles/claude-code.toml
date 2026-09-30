@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Interactive Claude Code sessions: long tool loops, almost no parallel tool
+# batches, blocking Task-tool subagents that cannot delegate further, and human
+# pauses between prompts. Shape only; run with `--headers claude-code` so the
+# requests also carry Claude Code's headers.
+#
+# Evidence: 496 Claude Code sessions in SWE-chat (tool split and prefix sizes,
+# see docs/codex-behavior.md#empirical-calibration) and their mean of about 86
+# tool calls per session. Human think time and tool latencies are assumptions;
+# fit them to the workload.
+#
+# The [load] section is a small closed-loop smoke load. Replace it with a
+# [load.arrivals] schedule to model a fleet; see docs/workloads.md.
+
+schema_version = 5
+seed = 42
+
+[load]
+num_sessions = 16
+concurrent_sessions = 8
+
+[trajectory]
+turns = { kind = "log_normal", median = 70.0, sigma = 0.9, min = 4, max = 600 }
+# A text-only response hands control back to the developer.
+think_time_ms = { kind = "log_normal", median = 30000.0, sigma = 1.0, min = 2000, max = 600000 }
+output_tokens = { kind = "log_normal", median = 300.0, sigma = 1.0, min = 16, max = 8000 }
+
+[tokens]
+system_prefix_tokens = { kind = "fixed", value = 12000 }
+tool_catalog_tokens = { kind = "fixed", value = 14000 }
+repository_tokens = { kind = "log_normal", median = 3000.0, sigma = 0.8, min = 256, max = 20000 }
+session_tokens = { kind = "uniform", min = 256, max = 1024 }
+user_tokens = { kind = "log_normal", median = 150.0, sigma = 1.0, min = 16, max = 4096 }
+tool_result_tokens = { kind = "log_normal", median = 1500.0, sigma = 0.9, min = 128, max = 16384 }
+context_window_tokens = 200000
+
+[behavior]
+tool_probability = 0.62
+parallel_tool_probability = 0.0
+subagent_probability = 0.06
+swarm_probability = 0.02
+completion_probability = 0.01
+
+[compaction]
+trigger_fraction = 0.9
+
+[subagents]
+# Subagents have no Task tool, and the parent waits for every Task result.
+max_depth = 1
+turns = { kind = "log_normal", median = 10.0, sigma = 0.6, min = 2, max = 60 }
+fanout = { kind = "uniform", min = 2, max = 3 }
+blocking_probability = 1.0
+
+# Class names map to Read, Grep, Bash, Edit, WebFetch, and TodoWrite in
+# Claude Code's x-claude-code-prev-tool-durations header.
+[[tools.classes]]
+name = "read"
+weight = 0.30
+latency_ms = { kind = "log_normal", median = 40.0, sigma = 0.8, min = 5, max = 2000 }
+result_tokens = { kind = "log_normal", median = 1200.0, sigma = 1.0, min = 32, max = 16000 }
+error_probability = 0.02
+
+[[tools.classes]]
+name = "search"
+weight = 0.15
+latency_ms = { kind = "log_normal", median = 200.0, sigma = 0.9, min = 20, max = 5000 }
+result_tokens = { kind = "log_normal", median = 300.0, sigma = 1.1, min = 16, max = 8000 }
+error_probability = 0.02
+
+[[tools.classes]]
+name = "shell"
+weight = 0.30
+latency_ms = { kind = "log_normal", median = 1500.0, sigma = 1.3, min = 20, max = 120000 }
+result_tokens = { kind = "log_normal", median = 400.0, sigma = 1.3, min = 8, max = 16000 }
+error_probability = 0.10
+
+[[tools.classes]]
+name = "patch"
+weight = 0.18
+latency_ms = { kind = "log_normal", median = 60.0, sigma = 0.7, min = 10, max = 2000 }
+result_tokens = { kind = "log_normal", median = 150.0, sigma = 0.8, min = 16, max = 4000 }
+error_probability = 0.05
+
+[[tools.classes]]
+name = "network"
+weight = 0.02
+latency_ms = { kind = "log_normal", median = 3000.0, sigma = 0.9, min = 300, max = 30000 }
+result_tokens = { kind = "log_normal", median = 2500.0, sigma = 1.0, min = 128, max = 16000 }
+error_probability = 0.10
+
+[[tools.classes]]
+name = "orchestration"
+weight = 0.05
+latency_ms = { kind = "log_normal", median = 20.0, sigma = 0.5, min = 2, max = 500 }
+result_tokens = { kind = "log_normal", median = 80.0, sigma = 0.6, min = 16, max = 1000 }
+error_probability = 0.0

@@ -5,7 +5,9 @@
 It supports two workload modes:
 
 - `replay`: reproduce token counts, KV-prefix topology, agent headers, output lengths, root arrivals, turn delays, and subagent dependencies from `dynamo.request.trace.v1` traces.
-- `generate`: create deterministic coding-agent traffic with tools, compaction, subagents, and swarms from a strict TOML profile.
+- `generate`: create deterministic coding-agent traffic with tools, compaction, subagents, and swarms from a strict TOML profile, either as a fixed pool of agent workers or as sessions arriving on an hours-long rate schedule.
+
+To turn a description of a customer's traffic into a run, start with [Describe a workload](docs/workloads.md).
 
 Prompt text is synthetic. The fidelity contract is request shape, KV reuse, agent lineage, and timing.
 
@@ -43,27 +45,29 @@ Captured replay follows Dynamo's agentic policy. Independent roots keep their re
 
 ## Generate agent traffic
 
-Create a deterministic plan without sending traffic:
+Pick a shape from `profiles/`: `claude-code.toml`, `codex.toml`, `swe-bench.toml`, or `diurnal-8h.toml` (the Claude Code shape under an eight-hour request-rate schedule). Summarize it without sending traffic:
 
 ```bash
 target/release/agent-loadgen plan \
-  --config profiles/tools-heavy.toml \
-  --output artifacts/tools-heavy-plan
+  --config profiles/diurnal-8h.toml \
+  --output artifacts/diurnal-plan
 ```
 
-Run the plan, here with Codex-style headers:
+`plan-summary.json` reports session and request statistics, the ideal prefix-cache hit rate, expected totals, and the expected request rate in each schedule bucket. Run it against a deployment, here as Claude Code, and stop after two hours:
 
 ```bash
 target/release/agent-loadgen generate \
-  --config profiles/tools-heavy.toml \
-  --headers codex \
+  --config profiles/diurnal-8h.toml \
+  --headers claude-code \
   --model zai-org/GLM-4.7-Flash \
   --target http://127.0.0.1:8000 \
-  --output artifacts/tools-heavy-run \
-  --tokenizer /models/GLM-4.7-Flash
+  --tokenizer /models/GLM-4.7-Flash \
+  --output artifacts/diurnal-run \
+  --max-in-flight 4096 \
+  --stop-after-minutes 120
 ```
 
-Generated traffic is closed-loop: model latency, tool time, compaction, and blocking subagent joins determine when the next request becomes ready. Every subagent is a separate child session with explicit parent lineage. Non-blocking children may continue after their parent advances.
+Generated traffic is closed-loop inside each session: model latency, tool time, compaction, and blocking subagent joins determine when the next request becomes ready. Sessions start at scheduled arrival times, or one after another in a fixed number of streams. Every subagent is a separate child session with explicit parent lineage. Each session tree is planned when it starts, so a run of any length holds only live sessions in memory.
 
 ## Serve the dashboard API
 
@@ -79,14 +83,17 @@ It reads dashboard data under `--root`, scans the request-trace object store wit
 
 ## Outputs
 
-- `scenario.json`: resolved generated profile and causal graph.
+- `plan-summary.json`: sampled session and request statistics, expected totals, and per-bucket arrivals for a generated plan of any size.
+- `scenario.json`: resolved generated profile and causal graph, for plans that fit `limits.max_nodes`.
 - `plan.dot`: Graphviz causal DAG grouped by top-level and child sessions, with spawn, join, and delay labels.
 - `plan.svg`: Graphviz rendering of `plan.dot` when the `dot` executable is available.
 - `requests.jsonl`: one result per completed request, including timing and output fidelity.
-- `run.json`: run configuration including the header dialect, bounded timing summaries, fidelity gates, and pass/fail status.
+- `timeline.csv`: requests, failures, sessions started, request and token rates, and TTFT and latency percentiles per time bucket.
+- `run.json`: run configuration including the header dialect, achieved throughput and latency percentiles, fidelity gates, and pass/fail status.
 
 ## Documentation
 
+- [Describe a workload](docs/workloads.md): from a traffic description to a profile, a plan summary, a run, and its results.
 - [How it works](docs/how-it-works.md): timing models, dependency scheduling, subagents, request construction, and module boundaries.
 - [Workspace architecture](docs/workspace.md): crate ownership, dependency direction, and where to make a change.
 - [Harness headers](docs/headers.md): Claude Code and Codex session, subagent, compaction, and gateway hint headers.

@@ -62,14 +62,14 @@ Generation has a planning phase and an execution phase.
 
 ### Planning
 
-`plan` resolves a strict TOML profile over the neutral defaults and uses one seeded RNG to build a finite dependency graph. The header dialect is not an input to planning. Each node records:
+`plan` resolves a strict TOML profile over the neutral defaults. Each top-level session tree has its own seeded random stream, so trees are planned independently; arrival times come from another. The header dialect is not an input to planning. Each node records:
 
 - Session and parent-session identity.
 - KV block sequence and output budget.
 - Dependencies and delay after dependency completion.
 - Tool, subagent, swarm, or compaction metadata.
 
-The complete graph is written to `scenario.json`. Runtime model text never changes the plan.
+`plan-summary.json` summarizes a sample of trees for plans of any size. A plan that fits `limits.max_nodes` is also joined into one graph and written to `scenario.json`. Runtime model text never changes the plan.
 
 The artifact also reports realized tool parallelism in two forms: the fraction of calls belonging to multi-call phases and the fraction of synthetic tool wall time with concurrent calls. This keeps high call batching from being mistaken for equally high time parallelism.
 
@@ -92,11 +92,13 @@ dependencies complete
                  release successors
 ```
 
-`load.concurrent_sessions` creates fixed top-level session streams. The first session tree in each stream follows the configured startup spacing. After its last model response completes, that stream starts its next top-level session tree after `restart_delay_ms`.
+The executor admits work one chunk at a time. A generated chunk is one top-level session tree; a captured trace is a single chunk. A chunk starts at a scheduled offset, such as a tree's arrival time, or a delay after its predecessor's anchor request completes, such as a stream's restart after the previous tree's root session ends. A chunk is planned about two seconds before it starts and dropped when its last request completes.
 
-A slower target therefore lowers generated request rate naturally. Independent top-level streams and child sessions can still overlap.
+With streams, `load.concurrent_sessions` creates fixed top-level session streams. The first session tree in each stream follows the configured startup spacing. After its root session's last response completes, the stream starts its next tree after `restart_delay_ms`. With an arrival schedule, trees start at their sampled arrival times regardless of how fast earlier trees finish.
 
-Only initial top-level request bodies are prepared before the clock anchor. Successor bodies are prepared when their final dependency completes. Token-payload memory therefore follows the runnable graph frontier rather than the total planned input-token count.
+A slower target therefore lowers the request rate of streams, and raises the number of live sessions under an arrival schedule. Independent trees and child sessions can still overlap.
+
+A chunk's root request bodies are prepared when the chunk is admitted. Successor bodies are prepared when their final dependency completes. Token-payload and plan memory therefore follow live session trees rather than the total planned load. `--stop-after-minutes` drops everything not yet dispatched at the deadline and ends the run once in-flight requests finish.
 
 ## Subagents and swarms
 
@@ -148,7 +150,7 @@ Frontend-observed arrival is different from client dispatch. Capture a Dynamo re
 
 ## Artifacts and claims
 
-`run.json` labels the protocol surface, traffic kind, token-path verification, and declared engine cache mode. Capacity or performance conclusions are blocked unless token IDs are verified to reach the engine unchanged and cache mode is declared.
+`run.json` labels the protocol surface, traffic kind, token-path verification, and declared engine cache mode, and reports achieved throughput with TTFT, request latency, and time-per-output-token percentiles. `timeline.csv` breaks the same measurements into fixed time buckets. Capacity or performance conclusions are blocked unless token IDs are verified to reach the engine unchanged and cache mode is declared.
 
 Cache policy remains outside this project. `join-telemetry` only correlates request-scoped engine records.
 

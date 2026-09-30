@@ -6,12 +6,12 @@ Schema version 5 defines traffic shape entirely in the profile. There is no `age
 
 Schema 4 profiles are rejected with a migration message: delete the `agent` line, set `schema_version = 5`, and pass `--headers` if a harness dialect is wanted. The five values the old presets varied (`tokens.system_prefix_tokens`, `tokens.tool_catalog_tokens`, `behavior.tool_probability`, `behavior.parallel_tool_probability`, `behavior.subagent_probability`) can be written into the profile explicitly to reproduce an old preset. Schema 3 names (`root_sessions`, `concurrent_agents`) remain rejected; there are no compatibility aliases.
 
-The load controls `num_sessions` and `concurrent_sessions` count only top-level agent session trees; subagent sessions are generated descendants in those trees. Independent work uses subagents with separate session lineage and explicit dependencies.
+The load controls count only top-level agent session trees; subagent sessions are generated descendants in those trees. Independent work uses subagents with separate session lineage and explicit dependencies. [Describe a workload](workloads.md) walks from a traffic description to a profile.
 
 ## Execution model
 
 ```text
-top-level stream -> session tree -> model request
+arrival or stream -> session tree -> model request
                                   |
                                   +--text----------think delay------> next request
                                   +--tool----------tool latency-----> next request
@@ -22,13 +22,19 @@ top-level stream -> session tree -> model request
                                   +--complete response--restart delay------> next session tree in stream
 ```
 
-Generated traffic is closed-loop. The first top-level session tree in each active stream starts during the configured ramp-up. Every later request becomes ready only after all graph dependencies complete, plus its sampled virtual delay. The final model response completes that session tree. The stream starts its next top-level session tree after `restart_delay_ms`. Target response latency therefore controls the generated request rate. The scheduler can still run independent streams and sibling subagents concurrently. A blocking child or swarm joins the parent. A non-blocking child continues in its own session while the parent continues.
+Generated traffic is closed-loop inside each session tree. A tree starts at its scheduled arrival, or, for streams, during the ramp-up or `restart_delay_ms` after its stream's previous tree completes. Every later request becomes ready only after all graph dependencies complete, plus its sampled virtual delay. The final model response of the root session completes the tree. Target response latency therefore shapes the generated request rate. The scheduler can still run independent streams and sibling subagents concurrently. A blocking child or swarm joins the parent. A non-blocking child continues in its own session while the parent continues.
 
 The generator does not execute tools or generate meaningful text. Tool classes sample delay, result-token geometry, failure, and retry behavior. Those sampled outcomes and direct child-session IDs are recorded on their originating node in `scenario.json`.
 
+## Planning and execution
+
+Each top-level session tree samples from its own random stream, derived from the seed and the tree's index, so any tree can be planned alone and in any order with the same result. `generate` plans each tree about two seconds before it starts and drops it when its last request completes, so a run of any length holds only live trees in memory.
+
+`plan` and `generate` both write `plan-summary.json`: session-tree and request statistics from up to 1,000 sampled trees, expected totals, the ideal prefix-cache hit rate, and, for arrivals, the per-bucket session starts and expected request rate. When the whole plan fits `limits.max_nodes`, they also join every tree into one request graph and write `scenario.json` and `plan.dot`.
+
 ## Plan graph
 
-`plan` writes `plan.dot` beside `scenario.json`; `generate` writes the same graph into its run directory before traffic starts. It is the canonical causal overview: top-level session trees contain nested child-session clusters, node labels show action and ISL/OSL, and edges label continuation, stream restart, spawn, blocking join, and sampled client-side delay. A non-blocking spawn has a `parent continues` edge. A multi-child blocking join converges on a `join all N children` diamond; only its outgoing edge to the parent successor carries the sampled join delay. A `stream restart` edge joins successive top-level trees in one configured stream and carries the sampled `restart_delay_ms`.
+`plan` writes `plan.dot` beside `scenario.json` when the plan fits one graph; `generate` writes the same graph into its run directory before traffic starts. It is the canonical causal overview: top-level session trees contain nested child-session clusters, node labels show action and ISL/OSL, and edges label continuation, stream restart, spawn, blocking join, and sampled client-side delay. A non-blocking spawn has a `parent continues` edge. A multi-child blocking join converges on a `join all N children` diamond; only its outgoing edge to the parent successor carries the sampled join delay. A `stream restart` edge joins successive top-level trees in one configured stream and carries the sampled `restart_delay_ms`.
 
 When Graphviz's `dot` executable is on `PATH`, the commands also write `plan.svg`. Otherwise the plan remains successful with `plan.dot`, which can be rendered later:
 
@@ -65,12 +71,25 @@ All sampling uses the profile seed. Log-normal samples are rounded and clamped t
 
 ## Load
 
-- `load.num_sessions`: total top-level agent session trees in the finite generated run.
+A profile uses either streams, the default, or an arrival schedule.
+
+Streams are a fixed pool of closed-loop workers:
+
+- `load.num_sessions`: total top-level agent session trees. Omit it with `duration_minutes` to run until the duration.
 - `load.concurrent_sessions`: number of closed-loop top-level session streams. It must not exceed `num_sessions`.
 - `load.startup_interval_ms`: spacing between the first session tree in each stream; zero starts the full population together.
 - `load.restart_delay_ms`: sampled idle delay between a completed session tree and its stream's next tree.
+- `load.duration_minutes`: no stream starts a new tree after this many minutes; trees already running finish.
 
 For example, `num_sessions = 100` and `concurrent_sessions = 10` runs ten active top-level streams, each processing ten session trees. With a zero restart delay, every stream replaces a completed tree immediately. Subagents are generated inside those trees and are not counted by either setting, but can temporarily push live request concurrency above ten.
+
+An arrival schedule starts top-level trees at Poisson times instead, independent of how fast earlier trees finish:
+
+- `load.arrivals.bucket_minutes`: length of each schedule bucket; the schedule lasts this times the number of rates.
+- `load.arrivals.sessions_per_minute` or `load.arrivals.requests_per_second`: exactly one, with one non-negative rate per bucket. Request rates become session rates through the mean requests per tree of 1,000 planned trees.
+- `load.arrivals.interpolation`: `step` (default) holds each bucket's rate; `linear` ramps between bucket midpoints.
+
+`[load.arrivals]` cannot be combined with the stream fields. Arrival times are sampled once from their own seeded random stream, so a profile and seed always produce the same start times.
 
 ## Trajectory and token shape
 
@@ -155,12 +174,12 @@ See [Subagents and swarms](subagents.md) for graph shape, joins, KV sharing, rec
 
 ## Safety limits
 
-- `limits.max_nodes`: hard bound on physical model requests in the materialized graph.
-- `limits.max_sessions`: hard bound on all protocol sessions, including top-level sessions and generated descendants.
-- `limits.max_total_input_tokens`: hard bound on the sum of request input lengths.
+- `limits.max_nodes`: maximum requests in one top-level session tree, and in a plan joined into `scenario.json`.
+- `limits.max_sessions`: maximum protocol sessions, including descendants, in one tree and in a joined plan.
+- `limits.max_total_input_tokens`: maximum summed input length of a tree and of a joined plan.
 
-Planning fails when a hard limit is exceeded. These limits bound generated-plan memory; they do not cap live HTTP concurrency, which is controlled by `--max-in-flight`.
+A tree that reaches a limit is cut short. A plan too large to join still runs with `generate`, which plans trees one at a time; `plan` then writes only `plan-summary.json`. These limits bound planner memory; they do not cap live HTTP concurrency, which is controlled by `--max-in-flight`.
 
 ## Reproducibility
 
-The plan records a resolved-profile SHA-256 digest and a scenario SHA-256 digest. Given the same binary behavior and config, the same seed produces the same top-level session trees, descendant graph, token labels, and samples. Runtime request IDs and measured timing are intentionally run-specific. `session_topology` in `scenario.json` separates configured top-level streams from generated child protocol sessions.
+The plan records a resolved-profile SHA-256 digest and, for joined plans, a scenario SHA-256 digest. Given the same binary behavior and config, the same seed produces the same arrival times, top-level session trees, descendant graph, token labels, and samples. Runtime request IDs and measured timing are intentionally run-specific. `session_topology` in `scenario.json` separates configured top-level streams from generated child protocol sessions.

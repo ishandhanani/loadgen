@@ -35,6 +35,8 @@ All sampling is deterministic for the resolved seed. Token segments are rounded 
 | `load.concurrent_sessions` | `8` | Exercises closed-loop top-level stream concurrency without treating the default as a production capacity target. |
 | `load.startup_interval_ms` | `0` | Starts the initial top-level population together so concurrency is visible immediately. |
 | `load.restart_delay_ms` | `fixed(0)` | Replaces a completed top-level session tree immediately; users should add measured user/task idle time when modeling an interactive fleet. |
+| `load.duration_minutes` | unset | Streams run until every one of `num_sessions` trees completes. |
+| `load.arrivals` | unset | Streams are the default load. An arrival schedule has no defaults: `bucket_minutes` and one rate list are required, and `interpolation` defaults to `step`. |
 
 These are top-level session streams. Subagents are generated within those session trees and can push live session and request concurrency above `load.concurrent_sessions`.
 
@@ -135,15 +137,8 @@ The dialect is a run-time flag, recorded in `run.json` as `header_dialect`, and 
 
 `profiles/balanced.toml` sets `seed = 42` and nothing else; it is the neutral default set above.
 
-`profiles/tools-heavy.toml` sets `seed = 42`, widens root turns to `uniform(4, 12)`, and replaces the generic tool list with this calibration:
+`profiles/tools-heavy.toml` sets `seed = 42`, widens root turns to `uniform(4, 12)`, and replaces the generic tool list with a faster, smaller-result calibration of the same six classes. It is intentionally a useful load shape, not a native-harness calibration.
 
-| Class | Weight | Latency milliseconds | Result tokens | Error probability |
-|---|---:|---|---|---:|
-| `read` | `0.27` | `log_normal(120, 0.8, 40, 350)` | `log_normal(500, 1.0, 128, 2000)` | `0.01` |
-| `search` | `0.21` | `log_normal(250, 0.9, 80, 900)` | `log_normal(900, 1.0, 128, 4000)` | `0.03` |
-| `shell` | `0.21` | `log_normal(600, 1.0, 100, 2500)` | `log_normal(1200, 1.1, 64, 8000)` | `0.08` |
-| `patch` | `0.13` | `log_normal(500, 0.9, 120, 1800)` | `log_normal(700, 0.9, 64, 3000)` | `0.05` |
-| `network` | `0.08` | `log_normal(1500, 1.0, 300, 5000)` | `log_normal(1800, 1.2, 128, 12000)` | `0.10` |
-| `orchestration` | `0.10` | `log_normal(80, 0.7, 20, 250)` | `log_normal(128, 0.7, 32, 512)` | `0.03` |
+`profiles/claude-code.toml`, `profiles/codex.toml`, and `profiles/swe-bench.toml` write harness- and workload-shaped values into every section, and `profiles/diurnal-8h.toml` puts the Claude Code shape under an eight-hour request-rate schedule. Each file's header comment separates measured values from assumptions; see [Describe a workload](workloads.md). They are shapes only: pair them with the matching `--headers` dialect to also match the harness on the wire.
 
-The tools-heavy profile is intentionally a useful load shape, not a native-harness calibration. Reasoning versus visible output, exact per-class parallel eligibility, history-fork modes, and model-specific compaction output still require trace evidence.
+Reasoning versus visible output, exact per-class parallel eligibility, history-fork modes, and model-specific compaction output still require trace evidence.

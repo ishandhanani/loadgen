@@ -10,7 +10,7 @@ Keep agent behavior separate from serving policy. Dynamo and the inference engin
 
 All traffic is agentic and causal. Captured replay uses Dynamo's lowering policy: independent roots retain recorded arrival offsets, while same-session turns, tool continuations, subagent launches, and joins wait for actual replay completions plus their recorded residual delays. Traces without `agent_context` are rejected.
 
-Generated traffic is also causal. A model response or sampled agent delay releases the next request. Target latency therefore changes the achieved request rate in both modes.
+Generated traffic is also causal. A model response or sampled agent delay releases the next request. Target latency therefore changes the achieved request rate in both modes. Top-level session trees start either in closed-loop streams or at arrival times sampled from a rate schedule. Each tree has its own seeded random stream, so `generate` plans trees lazily and a run's memory follows live trees.
 
 Captured requests and ordinary generated turns have positive input and output token counts. Compaction attempts carry the planned summary length as their output budget. A session completes with its last model response. With `--dynamo-session-final`, that response carries `x-dynamo-session-final: true`; the header marks an existing request and never adds one. Do not add lifecycle-control requests or zero-output close nodes without a new design decision.
 
@@ -42,7 +42,7 @@ The generator does not support child roles, per-child profiles, child-to-child m
 | `crates/replay/` | Token synthesis, HTTP/SSE transport, causal schedulers, artifacts, and telemetry joins. |
 | `crates/serve/` | HTTP service for the traces dashboard: in-process plan previews, replay-bundle export from the trace store, job state, caches, and limits. Depends on `trace`, `generate`, and `replay`; nothing depends on it. |
 | `src/` | Thin `agent-loadgen` CLI: flags, command composition, and exit behavior. |
-| `profiles/` | Small example profiles; shape only, no agent selection. |
+| `profiles/` | Example profiles: harness- and workload-calibrated shapes and an arrival schedule; shape only, no header selection. |
 | `docs/` | Architecture and detailed usage guides. |
 
 ## Change rules
