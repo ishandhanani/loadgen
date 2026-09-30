@@ -7,7 +7,7 @@ It supports two workload modes:
 - `replay`: reproduce token counts, KV-prefix topology, agent headers, output lengths, root arrivals, turn delays, and subagent dependencies from `dynamo.request.trace.v1` traces.
 - `generate`: create deterministic coding-agent traffic with tools, compaction, subagents, and swarms from a strict TOML profile, either as a fixed pool of agent workers or as sessions arriving on an hours-long rate schedule.
 
-To turn a description of a customer's traffic into a run, start with [Describe a workload](docs/workloads.md). Coding agents working in this repository load the [agent-loadgen skill](.agents/skills/agent-loadgen/SKILL.md) automatically: Codex reads `.agents/skills/`, and Claude Code reads `.claude/skills/`, which links to the same skill. To use it from other directories, link `.agents/skills/agent-loadgen` into `~/.agents/skills/` (Codex) or `~/.claude/skills/` (Claude Code).
+To turn a description of a customer's traffic into a run, start with [Describe a workload](docs/workloads.md). Coding agents can follow the [agent-loadgen skill](.agents/skills/agent-loadgen/SKILL.md), which agents that read `.agents/skills/`, such as Codex, load automatically in this repository.
 
 Prompt text is synthetic. The fidelity contract is request shape, KV reuse, agent lineage, and timing.
 

@@ -44,7 +44,7 @@ The generator does not support child roles, per-child profiles, child-to-child m
 | `src/` | Thin `agent-loadgen` CLI: flags, command composition, and exit behavior. |
 | `profiles/` | Example profiles: harness- and workload-calibrated shapes and an arrival schedule; shape only, no header selection. |
 | `docs/` | Architecture and detailed usage guides. |
-| `.agents/skills/agent-loadgen/` | Skill that teaches an agent to use the tool, loaded by Codex; `.claude/skills/agent-loadgen` links to it for Claude Code. Keep it in step with CLI flags, profile fields, and output files. |
+| `.agents/skills/agent-loadgen/` | Skill that teaches an agent to use the tool. Keep it in step with CLI flags, profile fields, and output files. |
 
 ## Change rules
 
