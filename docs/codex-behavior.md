@@ -162,7 +162,7 @@ Use the controls at different confidence levels:
 |---|---|
 | Reproduce one captured run | Use `replay`; do not infer distributions. |
 | Simulate observed Codex traffic | Fit token, action, timing, reasoning, compaction, and subagent distributions from several native traces. |
-| Approximate Codex from source only | Start from `profiles/tools-heavy.toml`, write the Codex tool split and prefix sizes from [Empirical calibration](#empirical-calibration), set compaction to 90% and subagent depth to one, run with `--headers codex`, and label the remaining distributions as assumptions. |
+| Approximate Codex from source only | Start from `profiles/codex.toml`, which already carries the Codex tool split, prefix sizes, 90% compaction, and subagent depth one; run with `--headers codex`, and treat its session length, think time, and tool latencies as assumptions. |
 | Stress a serving feature | Override the relevant probabilities, fanout, sizes, delays, or fault attempts directly. |
 | Compare routing or cache policy | Keep the profile and seed identical across treatments and verify the token path. |
 
