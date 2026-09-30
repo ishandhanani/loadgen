@@ -88,6 +88,7 @@ pub(super) struct RunAccumulator {
     output_tokens: u64,
     timeline_bucket_ms: f64,
     timeline: Vec<TimelineBucket>,
+    /// Root sessions already counted in the timeline.
     sessions_seen: HashSet<String>,
 }
 
@@ -98,7 +99,7 @@ struct TimelineBucket {
     failed: usize,
     input_tokens: u64,
     output_tokens: u64,
-    sessions_started: usize,
+    root_sessions_started: usize,
     ttft_ms: Vec<f32>,
     latency_ms: Vec<f32>,
 }
@@ -191,10 +192,11 @@ impl RunAccumulator {
         entry.input_tokens += result.expected_input_tokens as u64;
         entry.output_tokens += output_tokens;
         if let Some(session) = &result.session_id
+            && result.parent_session_id.is_none()
             && !self.sessions_seen.contains(session)
         {
             self.sessions_seen.insert(session.clone());
-            entry.sessions_started += 1;
+            entry.root_sessions_started += 1;
         }
         if !succeeded {
             entry.failed += 1;
@@ -237,7 +239,7 @@ pub(super) fn write_timeline(path: &Path, accumulator: &RunAccumulator) -> Resul
     );
     writeln!(
         writer,
-        "start_s,requests,failed,sessions_started,requests_per_s,input_tokens_per_s,output_tokens_per_s,ttft_p50_ms,ttft_p99_ms,latency_p50_ms,latency_p99_ms"
+        "start_s,requests,failed,root_sessions_started,requests_per_s,input_tokens_per_s,output_tokens_per_s,ttft_p50_ms,ttft_p99_ms,latency_p50_ms,latency_p99_ms"
     )?;
     let seconds = accumulator.timeline_bucket_ms / 1000.0;
     for (index, bucket) in accumulator.timeline.iter().enumerate() {
@@ -249,7 +251,7 @@ pub(super) fn write_timeline(path: &Path, accumulator: &RunAccumulator) -> Resul
             index as f64 * seconds,
             bucket.requests,
             bucket.failed,
-            bucket.sessions_started,
+            bucket.root_sessions_started,
             bucket.requests as f64 / seconds,
             bucket.input_tokens as f64 / seconds,
             bucket.output_tokens as f64 / seconds,

@@ -96,5 +96,5 @@ Generation plans each session tree shortly before it starts and drops it when it
 ## 5. Read the results
 
 - `run.json` records the header dialect, request and error counts, output-length fidelity, dispatch lag, and `performance`: achieved requests and tokens per second, and TTFT, request latency, and time per output token percentiles.
-- `timeline.csv` has one row per `--timeline-seconds` bucket (default 60): requests, failures, sessions started, request and token rates, and TTFT and latency percentiles. Compare it with `plan-summary.json`'s arrival buckets.
+- `timeline.csv` has one row per `--timeline-seconds` bucket (default 60): requests, failures, root sessions started, request and token rates, and TTFT and latency percentiles. Compare it with `plan-summary.json`'s arrival buckets.
 - `requests.jsonl` has one row per request. Its `replay_request_id` is the request's `x-request-id`, which joins it with Dynamo request traces and engine telemetry.

@@ -88,7 +88,7 @@ It reads dashboard data under `--root`, scans the request-trace object store wit
 - `plan.dot`: Graphviz causal DAG grouped by top-level and child sessions, with spawn, join, and delay labels.
 - `plan.svg`: Graphviz rendering of `plan.dot` when the `dot` executable is available.
 - `requests.jsonl`: one result per completed request, including timing and output fidelity.
-- `timeline.csv`: requests, failures, sessions started, request and token rates, and TTFT and latency percentiles per time bucket.
+- `timeline.csv`: requests, failures, root sessions started, request and token rates, and TTFT and latency percentiles per time bucket.
 - `run.json`: run configuration including the header dialect, achieved throughput and latency percentiles, fidelity gates, and pass/fail status.
 
 ## Documentation
