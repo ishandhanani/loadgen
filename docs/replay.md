@@ -51,12 +51,7 @@ This preserves external session arrivals without allowing a tool continuation or
 
 `--time-scale` divides both root offsets and dependency delays. `--max-in-flight` is a client concurrency bound; ready requests wait for a slot and report that wait as `local_admission_lag_ms`.
 
-The default client-offer gates are:
-
-- `--max-dispatch-p99-ms 2`
-- `--max-dispatch-max-ms 5`
-
-These measure delay after a graph node becomes ready. They do not measure frontend queueing or model service time.
+`run.json` reports `dispatch_lag_ms`, the delay between a request becoming ready and the HTTP client receiving it. It does not include frontend queueing or model service time.
 
 ## Synthetic tokens
 
@@ -66,9 +61,7 @@ Replay hashes describe block equality, not original prompt tokens. The token dic
 - Different hashes produce different full-block codewords.
 - Partial final blocks preserve as much hash entropy as their token capacity allows.
 
-Verified mode loads `tokenizer.json` from a local file, model directory, or Hugging Face model ID. It excludes known special IDs and records tokenizer and alphabet digests.
-
-A manual range requires both `--token-start` and `--allow-unverified-token-range`. Synthetic IDs are sent through `nvext.token_data`; use Dynamo's Rust chat processor so they reach the engine unchanged.
+`--tokenizer` loads `tokenizer.json` from a local file, model directory, or Hugging Face model ID. The alphabet excludes known special IDs, and `run.json` records tokenizer and alphabet digests. Synthetic IDs are sent through `nvext.token_data`; use Dynamo's Rust chat processor so they reach the engine unchanged.
 
 ## Inspect and replay
 
@@ -86,38 +79,13 @@ target/release/agent-loadgen replay trace.jsonl.gz \
 
 `--headers {claude-code|codex}` is required and selects the harness whose session, subagent, and compaction headers each request carries. When the trace recorded that harness's headers in `agent_context.agent_headers`, replay sends them verbatim; otherwise it derives them from the captured lineage. `--dynamo-session-final` additionally marks the last request of each captured session with `x-dynamo-session-final: true`. The dialect does not change which requests are sent or when. See [Harness headers](headers.md).
 
+`--stop-after-minutes` ends a replay at a deadline and reports the requests it sent. `timeline.csv` and `run.json.performance` report achieved throughput and latency.
+
 `inspect` reports root count and dependency-edge count in addition to shape statistics. `run.json` labels captured runs with `scheduling_model: agentic_causal` and records the `header_dialect`.
-
-## Compare a captured replay
-
-Enable Dynamo request tracing while replay runs, then compare the source with the new trace:
-
-```bash
-target/release/agent-loadgen compare \
-  --source source-trace.jsonl.gz \
-  --replay captured-trace.jsonl.gz \
-  --requests artifacts/replay/requests.jsonl
-```
-
-Comparison checks exact input/output lengths, block size, agent context, canonical KV-prefix topology, and frontend arrival error relative to the causal client dispatch times recorded in `requests.jsonl`. It does not compare dependent requests against their original absolute arrivals, because replay latency is intentionally allowed to move them.
-
-## Engine telemetry
-
-Cache policy stays outside the load generator. Optional engine JSONL can be joined after a run:
-
-```bash
-target/release/agent-loadgen join-telemetry \
-  --requests artifacts/replay/requests.jsonl \
-  --engine-telemetry engine.jsonl \
-  --output artifacts/replay/requests-with-engine.jsonl
-```
-
-Records are matched across replay request ID, source `x_request_id`, and source request ID. Unknown fields are retained without interpreting engine policy.
 
 ## Limits
 
 - Parent/child headers identify session topology but not always exact request-level launch and join points. Timestamp inference is used when explicit tool evidence is absent.
-- `--max-requests` selects the earliest requests and may intentionally omit later joins.
 - Source timestamps have millisecond resolution.
 - Dummy tokens preserve equality shape, not literal production KV hash values.
 - The loader materializes the selected trace and causal graph in memory, matching Dynamo's lowering model.

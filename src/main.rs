@@ -2,11 +2,11 @@
 
 use std::time::Duration;
 
-use agent_loadgen_generate::scenario::{GeneratedScenario, GeneratorConfig, write_plan_graph};
-use agent_loadgen_replay::telemetry::join_engine_telemetry;
+use agent_loadgen_generate::scenario::{
+    GeneratorConfig, PlanSummary, TreePlanner, write_plan_graph,
+};
 use agent_loadgen_replay::token_shape::TokenDictionary;
-use agent_loadgen_replay::{ReplayOptions, run_agentic_replay, run_generated_scenario};
-use agent_loadgen_trace::compare::{CompareOptions, compare_traces};
+use agent_loadgen_replay::{ReplayOptions, run_agentic_replay, run_generated};
 use agent_loadgen_trace::load_agentic_trace;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -24,11 +24,7 @@ async fn main() -> Result<()> {
             selection,
             tokens,
         } => {
-            let trace = load_agentic_trace(
-                &trace,
-                selection.max_requests,
-                selection.session_id.as_deref(),
-            )?;
+            let trace = load_agentic_trace(&trace, selection.session_id.as_deref())?;
             let dictionary = TokenDictionary::new(
                 trace.manifest.trace_block_size,
                 trace.manifest.distinct_sequence_hashes,
@@ -52,23 +48,13 @@ async fn main() -> Result<()> {
             output,
             selection,
             tokens,
-            fidelity,
             max_in_flight,
-            warmup_connections,
-            http_transport,
-            result_flush_interval,
-            max_dispatch_p99_ms,
-            max_dispatch_max_ms,
-            start_delay_ms,
             timeout_seconds,
             time_scale,
             static_headers,
+            run,
         } => {
-            let trace = load_agentic_trace(
-                &trace,
-                selection.max_requests,
-                selection.session_id.as_deref(),
-            )?;
+            let trace = load_agentic_trace(&trace, selection.session_id.as_deref())?;
             let dictionary = TokenDictionary::new(
                 trace.manifest.trace_block_size,
                 trace.manifest.distinct_sequence_hashes,
@@ -84,52 +70,21 @@ async fn main() -> Result<()> {
                     target,
                     output_dir: output,
                     max_in_flight,
-                    warmup_connections,
-                    http_transport,
-                    result_flush_interval,
-                    max_dispatch_p99_ms,
-                    max_dispatch_max_ms,
-                    start_delay: Duration::from_millis(start_delay_ms),
                     timeout: Duration::from_secs(timeout_seconds),
                     time_scale,
-                    token_path_verified: fidelity.token_path_verified,
-                    engine_cache_mode: parse_key_values(
-                        fidelity.engine_cache_mode,
-                        "engine cache mode",
-                    )?,
                     static_headers: parse_headers(static_headers)?,
+                    stop_after: run.stop_after()?,
                 },
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(&summary)?);
             if !summary.passed {
-                bail!("shape-strict replay failed request or dispatch-timing fidelity checks");
+                bail!("some replayed requests failed or missed their recorded output length");
             }
         }
         Command::Plan { config, output } => {
-            let scenario = GeneratedScenario::generate(GeneratorConfig::load(&config)?.resolve()?)?;
-            std::fs::create_dir_all(&output).with_context(|| {
-                format!("failed to create output directory {}", output.display())
-            })?;
-            let scenario_path = output.join("scenario.json");
-            let writer = std::io::BufWriter::new(
-                std::fs::File::create(&scenario_path)
-                    .with_context(|| format!("failed to create {}", scenario_path.display()))?,
-            );
-            serde_json::to_writer_pretty(writer, &scenario)
-                .with_context(|| format!("failed to write {}", scenario_path.display()))?;
-            let graph_artifacts = write_plan_graph(&output, &scenario)?;
-            let output = serde_json::json!({
-                "scenario_digest_sha256": scenario.scenario_digest_sha256,
-                "profile_digest_sha256": scenario.profile_digest_sha256,
-                "requests": scenario.nodes.len(),
-                "session_topology": scenario.session_topology,
-                "tool_parallelism": scenario.tool_parallelism,
-                "trace_manifest": scenario.trace_manifest,
-                "scenario_path": scenario_path,
-                "graph_path": graph_artifacts.dot_path,
-                "graphviz_svg_path": graph_artifacts.svg_path,
-            });
+            let planner = TreePlanner::new(GeneratorConfig::load(&config)?.resolve()?)?;
+            let output = write_plan_artifacts(&planner, &output)?;
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
         Command::Generate {
@@ -140,26 +95,16 @@ async fn main() -> Result<()> {
             target,
             output,
             tokens,
-            fidelity,
             max_in_flight,
-            warmup_connections,
-            http_transport,
-            result_flush_interval,
-            max_dispatch_p99_ms,
-            max_dispatch_max_ms,
-            start_delay_ms,
             timeout_seconds,
-            time_scale,
             static_headers,
+            run,
         } => {
-            let scenario = GeneratedScenario::generate(GeneratorConfig::load(&config)?.resolve()?)?;
-            let dictionary = TokenDictionary::new(
-                scenario.trace_manifest.trace_block_size,
-                scenario.trace_manifest.distinct_sequence_hashes,
-                tokens.load()?,
-            )?;
-            let summary = run_generated_scenario(
-                &scenario,
+            let planner = TreePlanner::new(GeneratorConfig::load(&config)?.resolve()?)?;
+            write_plan_artifacts(&planner, &output)?;
+            let dictionary = TokenDictionary::new(planner.config().block_size, 0, tokens.load()?)?;
+            let summary = run_generated(
+                &planner,
                 dictionary,
                 ReplayOptions {
                     header_dialect,
@@ -168,47 +113,16 @@ async fn main() -> Result<()> {
                     target,
                     output_dir: output,
                     max_in_flight,
-                    warmup_connections,
-                    http_transport,
-                    result_flush_interval,
-                    max_dispatch_p99_ms,
-                    max_dispatch_max_ms,
-                    start_delay: Duration::from_millis(start_delay_ms),
                     timeout: Duration::from_secs(timeout_seconds),
-                    time_scale,
-                    token_path_verified: fidelity.token_path_verified,
-                    engine_cache_mode: parse_key_values(
-                        fidelity.engine_cache_mode,
-                        "engine cache mode",
-                    )?,
+                    time_scale: 1.0,
                     static_headers: parse_headers(static_headers)?,
+                    stop_after: run.stop_after()?,
                 },
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(&summary)?);
             if !summary.passed {
-                bail!("generated traffic failed request or dispatch-timing checks");
-            }
-        }
-        Command::Compare {
-            source,
-            replay,
-            requests,
-            max_arrival_p99_ms,
-            max_arrival_max_ms,
-        } => {
-            let report = compare_traces(
-                &source,
-                &replay,
-                &requests,
-                CompareOptions {
-                    max_arrival_p99_ms,
-                    max_arrival_max_ms,
-                },
-            )?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-            if !report.passed {
-                bail!("replay fidelity comparison failed");
+                bail!("some generated requests failed or missed their planned output length");
             }
         }
         Command::Serve {
@@ -239,16 +153,51 @@ async fn main() -> Result<()> {
             })
             .await?;
         }
-        Command::JoinTelemetry {
-            requests,
-            engine_telemetry,
-            output,
-        } => {
-            let summary = join_engine_telemetry(&requests, &engine_telemetry, &output)?;
-            println!("{}", serde_json::to_string_pretty(&summary)?);
-        }
     }
     Ok(())
+}
+
+/// Write plan-summary.json and, when the plan fits one graph, scenario.json,
+/// plan.dot, and plan.svg.
+fn write_plan_artifacts(
+    planner: &TreePlanner,
+    output: &std::path::Path,
+) -> Result<serde_json::Value> {
+    std::fs::create_dir_all(output)
+        .with_context(|| format!("failed to create output directory {}", output.display()))?;
+    let summary = PlanSummary::sample(planner)?;
+    let summary_path = output.join("plan-summary.json");
+    write_pretty_json(&summary_path, &summary)?;
+    let mut result = serde_json::json!({
+        "summary": summary,
+        "summary_path": summary_path,
+    });
+    // Only finite plans within limits.max_nodes are joined into one graph.
+    let fits = planner.tree_count().is_some_and(|trees| {
+        summary.per_tree.requests.mean * trees as f64 <= planner.config().max_nodes as f64
+    });
+    if fits && let Ok(scenario) = planner.materialize() {
+        let scenario_path = output.join("scenario.json");
+        write_pretty_json(&scenario_path, &scenario)?;
+        let graph = write_plan_graph(output, &scenario)?;
+        result["scenario_digest_sha256"] = serde_json::json!(scenario.scenario_digest_sha256);
+        result["requests"] = serde_json::json!(scenario.nodes.len());
+        result["session_topology"] = serde_json::json!(scenario.session_topology);
+        result["tool_parallelism"] = serde_json::json!(scenario.tool_parallelism);
+        result["scenario_path"] = serde_json::json!(scenario_path);
+        result["graph_path"] = serde_json::json!(graph.dot_path);
+        result["graphviz_svg_path"] = serde_json::json!(graph.svg_path);
+    }
+    Ok(result)
+}
+
+fn write_pretty_json(path: &std::path::Path, value: &impl serde::Serialize) -> Result<()> {
+    let writer = std::io::BufWriter::new(
+        std::fs::File::create(path)
+            .with_context(|| format!("failed to create {}", path.display()))?,
+    );
+    serde_json::to_writer_pretty(writer, value)
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn home_dir() -> Result<std::path::PathBuf> {
@@ -270,43 +219,4 @@ fn parse_headers(headers: Vec<String>) -> Result<Vec<(String, String)>> {
             Ok((name.to_string(), value.to_string()))
         })
         .collect()
-}
-
-fn parse_key_values(
-    values: Vec<String>,
-    label: &str,
-) -> Result<std::collections::BTreeMap<String, String>> {
-    let mut parsed = std::collections::BTreeMap::new();
-    for value in values {
-        let (name, setting) = value
-            .split_once('=')
-            .with_context(|| format!("{label} {value:?} must use NAME=VALUE"))?;
-        if name.is_empty() || setting.is_empty() {
-            bail!("{label} names and values must not be empty");
-        }
-        if parsed
-            .insert(name.to_string(), setting.to_string())
-            .is_some()
-        {
-            bail!("{label} {name:?} is declared more than once");
-        }
-    }
-    Ok(parsed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cache_mode_rejects_duplicate_keys() {
-        let result = parse_key_values(
-            vec![
-                "ownership=session".to_string(),
-                "ownership=shared".to_string(),
-            ],
-            "engine cache mode",
-        );
-        assert!(result.is_err());
-    }
 }

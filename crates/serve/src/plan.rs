@@ -256,17 +256,15 @@ pub fn materialize_scenario_blocking(job: &JobDir) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
-    fn tools_heavy() -> String {
-        fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../profiles/tools-heavy.toml"
-        ))
-        .unwrap()
+    /// A small plan: the neutral defaults with four top-level sessions.
+    fn small_profile() -> String {
+        "schema_version = 5\nseed = 42\n[load]\nnum_sessions = 4\nconcurrent_sessions = 2\n"
+            .to_string()
     }
 
     #[test]
     fn timeline_and_summary_follow_the_scenario() {
-        let scenario = generate_scenario(&tools_heavy()).unwrap();
+        let scenario = generate_scenario(&small_profile()).unwrap();
         let timeline = timeline(&scenario);
         let summary = summary(&scenario);
         assert_eq!(timeline.sessions.len(), scenario.sessions.len());
@@ -302,6 +300,7 @@ mod tests {
                 "parallel_tools",
                 "subagent",
                 "swarm",
+                "compaction_attempt",
                 "complete"
             ]
             .contains(&node.a.as_str())),
@@ -322,7 +321,7 @@ mod tests {
             id: "p-test".to_string(),
             path: dir.path().to_path_buf(),
         };
-        let response = run_plan_blocking(&job, &tools_heavy()).unwrap();
+        let response = run_plan_blocking(&job, &small_profile()).unwrap();
         assert_eq!(response.command, GENERATE_COMMAND);
         assert!(response.scenario_bytes > 0);
         assert!(dir.path().join("plan.dot").is_file());

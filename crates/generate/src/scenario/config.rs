@@ -48,6 +48,74 @@ pub struct LoadOverrides {
     pub startup_interval_ms: Option<u64>,
     /// Delay before a completed top-level stream starts its next session tree.
     pub restart_delay_ms: Option<UIntDistribution>,
+    /// Stop starting new session trees in the streams after this many minutes.
+    pub duration_minutes: Option<f64>,
+    /// Open-loop session arrivals from a rate schedule, instead of streams.
+    pub arrivals: Option<ArrivalOverrides>,
+}
+
+/// A piecewise session arrival rate: one value per consecutive bucket.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArrivalOverrides {
+    pub bucket_minutes: f64,
+    pub sessions_per_minute: Option<Vec<f64>>,
+    pub requests_per_second: Option<Vec<f64>>,
+    #[serde(default)]
+    pub interpolation: Interpolation,
+}
+
+/// How the arrival rate changes inside the schedule.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Interpolation {
+    /// Each bucket holds its rate constant.
+    #[default]
+    Step,
+    /// The rate moves linearly between bucket midpoints.
+    Linear,
+}
+
+/// Unit of an arrival schedule's rates.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RateUnit {
+    SessionsPerMinute,
+    RequestsPerSecond,
+}
+
+/// How top-level session trees start.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolvedLoad {
+    /// Closed-loop streams: each starts its next tree after the previous one ends.
+    Streams {
+        /// `None` runs until `duration_minutes` elapses.
+        num_sessions: Option<usize>,
+        concurrent_sessions: usize,
+        startup_interval_ms: u64,
+        restart_delay_ms: UIntDistribution,
+        duration_minutes: Option<f64>,
+    },
+    /// Open loop: trees start at Poisson arrival times from a rate schedule.
+    Arrivals {
+        bucket_minutes: f64,
+        rate_unit: RateUnit,
+        rates: Vec<f64>,
+        interpolation: Interpolation,
+    },
+}
+
+impl ResolvedLoad {
+    pub fn streams(num_sessions: usize, concurrent_sessions: usize) -> Self {
+        Self::Streams {
+            num_sessions: Some(num_sessions),
+            concurrent_sessions,
+            startup_interval_ms: 0,
+            restart_delay_ms: UIntDistribution::fixed(0),
+            duration_minutes: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -135,10 +203,7 @@ pub struct ToolClass {
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedGeneratorConfig {
     pub seed: u64,
-    pub num_sessions: usize,
-    pub concurrent_sessions: usize,
-    pub startup_interval_ms: u64,
-    pub restart_delay_ms: UIntDistribution,
+    pub load: ResolvedLoad,
     pub turns: UIntDistribution,
     pub subagent_turns: UIntDistribution,
     pub think_time_ms: UIntDistribution,
@@ -227,16 +292,7 @@ impl GeneratorConfig {
             );
         }
         let mut resolved = ResolvedGeneratorConfig::defaults(self.seed);
-        replace(&mut resolved.num_sessions, self.load.num_sessions);
-        replace(
-            &mut resolved.concurrent_sessions,
-            self.load.concurrent_sessions,
-        );
-        replace(
-            &mut resolved.startup_interval_ms,
-            self.load.startup_interval_ms,
-        );
-        replace(&mut resolved.restart_delay_ms, self.load.restart_delay_ms);
+        resolved.load = self.load.resolve()?;
         replace(&mut resolved.turns, self.trajectory.turns);
         replace(&mut resolved.think_time_ms, self.trajectory.think_time_ms);
         replace(&mut resolved.output_tokens, self.trajectory.output_tokens);
@@ -341,6 +397,48 @@ impl GeneratorConfig {
     }
 }
 
+impl LoadOverrides {
+    fn resolve(self) -> Result<ResolvedLoad> {
+        let Some(arrivals) = self.arrivals else {
+            let num_sessions = match (self.num_sessions, self.duration_minutes) {
+                (None, Some(_)) => None,
+                (num_sessions, _) => Some(num_sessions.unwrap_or(16)),
+            };
+            return Ok(ResolvedLoad::Streams {
+                num_sessions,
+                concurrent_sessions: self.concurrent_sessions.unwrap_or(8),
+                startup_interval_ms: self.startup_interval_ms.unwrap_or(0),
+                restart_delay_ms: self.restart_delay_ms.unwrap_or(UIntDistribution::fixed(0)),
+                duration_minutes: self.duration_minutes,
+            });
+        };
+        if self.num_sessions.is_some()
+            || self.concurrent_sessions.is_some()
+            || self.startup_interval_ms.is_some()
+            || self.restart_delay_ms.is_some()
+            || self.duration_minutes.is_some()
+        {
+            bail!(
+                "[load.arrivals] replaces num_sessions, concurrent_sessions, startup_interval_ms, restart_delay_ms, and duration_minutes; remove them"
+            );
+        }
+        let (rate_unit, rates) = match (arrivals.sessions_per_minute, arrivals.requests_per_second)
+        {
+            (Some(rates), None) => (RateUnit::SessionsPerMinute, rates),
+            (None, Some(rates)) => (RateUnit::RequestsPerSecond, rates),
+            _ => bail!(
+                "[load.arrivals] needs exactly one of sessions_per_minute or requests_per_second"
+            ),
+        };
+        Ok(ResolvedLoad::Arrivals {
+            bucket_minutes: arrivals.bucket_minutes,
+            rate_unit,
+            rates,
+            interpolation: arrivals.interpolation,
+        })
+    }
+}
+
 fn replace<T>(target: &mut T, value: Option<T>) {
     if let Some(value) = value {
         *target = value;
@@ -355,10 +453,7 @@ impl ResolvedGeneratorConfig {
     pub(super) fn defaults(seed: u64) -> Self {
         Self {
             seed,
-            num_sessions: 16,
-            concurrent_sessions: 8,
-            startup_interval_ms: 0,
-            restart_delay_ms: UIntDistribution::fixed(0),
+            load: ResolvedLoad::streams(16, 8),
             turns: UIntDistribution::uniform(4, 10),
             subagent_turns: UIntDistribution::uniform(2, 5),
             think_time_ms: UIntDistribution::log_normal(750.0, 0.8, 25, 15_000),
@@ -399,18 +494,7 @@ impl ResolvedGeneratorConfig {
     }
 
     pub(super) fn validate(&self) -> Result<()> {
-        if self.num_sessions == 0 {
-            bail!("num_sessions must be greater than zero");
-        }
-        if self.concurrent_sessions == 0 {
-            bail!("concurrent_sessions must be greater than zero");
-        }
-        if self.concurrent_sessions > self.num_sessions {
-            bail!("concurrent_sessions must not exceed num_sessions");
-        }
-        if self.num_sessions > self.max_sessions || self.num_sessions > self.max_nodes {
-            bail!("generation limits cannot hold all configured top-level sessions");
-        }
+        self.load.validate()?;
         if self.block_size == 0 {
             bail!("token block size must be greater than zero");
         }
@@ -421,7 +505,6 @@ impl ResolvedGeneratorConfig {
             bail!("generation limits must be greater than zero");
         }
         for (name, distribution) in [
-            ("restart delay", &self.restart_delay_ms),
             ("turns", &self.turns),
             ("subagent turns", &self.subagent_turns),
             ("think time", &self.think_time_ms),
@@ -522,6 +605,70 @@ impl ResolvedGeneratorConfig {
             bail!("tool class weights are invalid");
         }
         Ok(())
+    }
+}
+
+impl ResolvedLoad {
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::Streams {
+                num_sessions,
+                concurrent_sessions,
+                restart_delay_ms,
+                duration_minutes,
+                ..
+            } => {
+                if *num_sessions == Some(0) {
+                    bail!("num_sessions must be greater than zero");
+                }
+                if *concurrent_sessions == 0 {
+                    bail!("concurrent_sessions must be greater than zero");
+                }
+                if num_sessions.is_some_and(|sessions| *concurrent_sessions > sessions) {
+                    bail!("concurrent_sessions must not exceed num_sessions");
+                }
+                if let Some(minutes) = duration_minutes
+                    && (!minutes.is_finite() || *minutes <= 0.0)
+                {
+                    bail!("duration_minutes must be a positive number");
+                }
+                restart_delay_ms.validate("restart delay")
+            }
+            Self::Arrivals {
+                bucket_minutes,
+                rates,
+                ..
+            } => {
+                if !bucket_minutes.is_finite() || *bucket_minutes <= 0.0 {
+                    bail!("arrival bucket_minutes must be a positive number");
+                }
+                if rates.is_empty() {
+                    bail!("an arrival schedule needs at least one rate");
+                }
+                if rates.iter().any(|rate| !rate.is_finite() || *rate < 0.0) {
+                    bail!("arrival rates must be finite and non-negative");
+                }
+                if rates.iter().all(|rate| *rate == 0.0) {
+                    bail!("an arrival schedule needs at least one positive rate");
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Schedule length for arrivals, or the stream duration when one is set.
+    pub fn duration_ms(&self) -> Option<u64> {
+        let minutes = match self {
+            Self::Streams {
+                duration_minutes, ..
+            } => (*duration_minutes)?,
+            Self::Arrivals {
+                bucket_minutes,
+                rates,
+                ..
+            } => bucket_minutes * rates.len() as f64,
+        };
+        Some((minutes * 60_000.0).round() as u64)
     }
 }
 
@@ -662,6 +809,67 @@ mod tests {
         .to_string();
         assert!(error.starts_with("generator schema 5 has no `agent` field"));
         assert!(error.contains("--headers"));
+    }
+
+    #[test]
+    fn arrival_schedules_replace_stream_settings() {
+        let resolved = GeneratorConfig::parse(
+            r#"
+                schema_version = 5
+                [load.arrivals]
+                bucket_minutes = 60
+                requests_per_second = [1.5, 3.0]
+                interpolation = "linear"
+            "#,
+        )
+        .unwrap()
+        .resolve()
+        .unwrap();
+        assert_eq!(
+            resolved.load,
+            ResolvedLoad::Arrivals {
+                bucket_minutes: 60.0,
+                rate_unit: RateUnit::RequestsPerSecond,
+                rates: vec![1.5, 3.0],
+                interpolation: Interpolation::Linear,
+            }
+        );
+        assert_eq!(resolved.load.duration_ms(), Some(7_200_000));
+        for invalid in [
+            "[load]\nnum_sessions = 4\n[load.arrivals]\nbucket_minutes = 1\nsessions_per_minute = [1.0]",
+            "[load.arrivals]\nbucket_minutes = 1\nsessions_per_minute = [1.0]\nrequests_per_second = [1.0]",
+            "[load.arrivals]\nbucket_minutes = 1\nsessions_per_minute = [0.0]",
+            "[load.arrivals]\nbucket_minutes = 0\nsessions_per_minute = [1.0]",
+            "[load.arrivals]\nbucket_minutes = 1\nsessions_per_minute = [1.0]\nburst = true",
+        ] {
+            let text = format!("schema_version = 5\n{invalid}\n");
+            assert!(
+                GeneratorConfig::parse(&text)
+                    .and_then(GeneratorConfig::resolve)
+                    .is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn stream_duration_without_a_session_count_is_unbounded() {
+        let resolved = GeneratorConfig::parse(
+            "schema_version = 5\n[load]\nconcurrent_sessions = 4\nduration_minutes = 30\n",
+        )
+        .unwrap()
+        .resolve()
+        .unwrap();
+        let ResolvedLoad::Streams {
+            num_sessions,
+            duration_minutes,
+            ..
+        } = resolved.load
+        else {
+            panic!("expected streams");
+        };
+        assert_eq!(num_sessions, None);
+        assert_eq!(duration_minutes, Some(30.0));
     }
 
     #[test]

@@ -35,7 +35,7 @@ The default abort and retry probabilities are zero. In that configuration, one l
 
 `duplicate_noop` represents a duplicate physical request after success. It must not change the planned context a second time.
 
-All compaction requests omit a forced output budget. `compaction.summary_output_tokens` controls retained synthetic summary size. It does not force the target response length.
+Every attempt asks for the planned summary: it sends `max_tokens` with `ignore_eos` set to the sampled `compaction.summary_output_tokens`. Synthetic prompts give a model no natural place to stop, so an unbounded attempt would decode until the context limit and its output length would no longer follow the plan. Only the `apply_once` attempt adds the summary to later context.
 
 ## KV-window change
 
@@ -75,7 +75,7 @@ Dynamo request traces record these headers verbatim in `agent_context.agent_head
 
 A client abort proves only that the load generator canceled its wait. It does not prove that the router or engine avoided a cache mutation.
 
-Use request-scoped engine telemetry to prove cache effects. Join that telemetry after the run with `join-telemetry`. Cache policy remains outside agent-loadgen.
+Proving a cache effect takes request-scoped engine telemetry, joined to `requests.jsonl` by `x-request-id`. Cache policy remains outside agent-loadgen.
 
 ## Profile controls
 

@@ -7,10 +7,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
-use super::artifacts::{SummaryIdentity, summarize, write_json};
-use super::causal::{CausalWorkload, execute_causally};
+use super::artifacts::{SummaryIdentity, summarize, write_json, write_timeline};
+use super::causal::{CausalWorkload, Chunk, ChunkNode, execute_causally};
 use super::request::{
-    build_http_client, normalize_target, prepare_open_file_limit, prepare_request, validate_options,
+    connect, normalize_target, prepare_open_file_limit, prepare_request, validate_options,
 };
 use super::{PreparedRequest, ReplayOptions, RequestExecution, RunSummary, TrafficKind};
 use crate::headers::{HeaderInput, Headers, render};
@@ -33,68 +33,113 @@ pub async fn run_agentic_replay(
         )
     })?;
 
-    let client = build_http_client(&options)?;
     let target = normalize_target(&options.target);
+    let (client, http_version) = connect(&options, &target).await?;
     let run_id = Uuid::new_v4().to_string();
     let token_manifest = dictionary.manifest().clone();
     let options = Arc::new(options);
     let session_finals = session_final_flags(&trace);
-    let workload = CapturedWorkload {
-        request_factory: CapturedRequestFactory {
-            trace: &trace,
-            session_finals,
-            headers,
-            dictionary: &dictionary,
-            client: client.clone(),
-            target: target.clone(),
-            run_id: run_id.clone(),
-            options: Arc::clone(&options),
-        },
+    let mut workload = CapturedWorkload {
+        trace: &trace,
+        session_finals,
+        headers,
+        dictionary: &dictionary,
+        client: client.clone(),
+        target: target.clone(),
+        run_id: run_id.clone(),
+        options: Arc::clone(&options),
+        scheduled: false,
     };
-    let execution = execute_causally(&workload, client, &target, &options).await?;
+    let execution = execute_causally(&mut workload, client, &options).await?;
     let summary = summarize(
         SummaryIdentity {
             traffic_kind: TrafficKind::CapturedTrace,
             run_id,
             target: &target,
+            http_version,
         },
         &trace.manifest,
         &token_manifest,
         &options,
         &execution.accumulator,
         execution.elapsed,
+        execution.stopped_early,
     );
     write_json(&options.output_dir.join("run.json"), &summary)?;
+    write_timeline(
+        &options.output_dir.join("timeline.csv"),
+        &execution.accumulator,
+    )?;
     Ok(summary)
 }
 
+/// The whole captured trace runs as one chunk that starts at time zero.
 struct CapturedWorkload<'a> {
-    request_factory: CapturedRequestFactory<'a>,
+    trace: &'a AgenticTrace,
+    session_finals: Vec<bool>,
+    headers: Vec<Headers>,
+    dictionary: &'a TokenDictionary,
+    client: reqwest::Client,
+    target: String,
+    run_id: String,
+    options: Arc<ReplayOptions>,
+    scheduled: bool,
 }
 
 impl CausalWorkload for CapturedWorkload<'_> {
-    fn node_count(&self) -> usize {
-        self.request_factory.trace.turns.len()
-    }
-
-    fn dependencies(&self, ordinal: usize) -> &[usize] {
-        &self.request_factory.trace.turns[ordinal].dependencies
-    }
-
-    fn initial_arrival_ms(&self, ordinal: usize) -> Option<u64> {
-        self.request_factory.trace.turns[ordinal].root_arrival_ms
-    }
-
-    fn delay_after_dependencies_ms(&self, ordinal: usize) -> u64 {
-        self.request_factory.trace.turns[ordinal].delay_after_dependencies_ms
-    }
-
-    fn prepare(&self, ordinal: usize) -> Result<PreparedRequest> {
-        self.request_factory.prepare(ordinal)
-    }
+    type Payload = ();
 
     fn name(&self) -> &'static str {
         "captured agentic replay"
+    }
+
+    fn next_scheduled(&mut self) -> Result<Option<(u64, usize)>> {
+        Ok((!std::mem::replace(&mut self.scheduled, true)).then_some((0, 0)))
+    }
+
+    fn successor(&mut self, _chunk: usize) -> Result<Option<(u64, usize)>> {
+        Ok(None)
+    }
+
+    fn load(&mut self, _chunk: usize) -> Result<Chunk<()>> {
+        Ok(Chunk {
+            nodes: self
+                .trace
+                .turns
+                .iter()
+                .map(|turn| ChunkNode {
+                    dependencies: turn.dependencies.clone(),
+                    start_offset_ms: turn.root_arrival_ms,
+                    delay_after_dependencies_ms: turn.delay_after_dependencies_ms,
+                })
+                .collect(),
+            anchor: None,
+            payload: (),
+        })
+    }
+
+    fn prepare(&self, _payload: &(), node: usize, ordinal: usize) -> Result<PreparedRequest> {
+        let turn = self
+            .trace
+            .turns
+            .get(node)
+            .with_context(|| format!("agentic replay turn {node} is missing"))?;
+        let mut request = turn.request.clone();
+        request.ordinal = ordinal;
+        prepare_request(
+            &self.client,
+            &self.target,
+            &self.run_id,
+            &self.options,
+            self.dictionary,
+            request,
+            RequestExecution {
+                headers: self.headers[node].clone(),
+                output_budget_tokens: Some(turn.request.output_tokens),
+                compaction_attempt: None,
+                session_final: self.session_finals[node],
+            },
+        )
     }
 }
 
@@ -137,39 +182,4 @@ fn session_final_flags(trace: &AgenticTrace) -> Vec<bool> {
         flags[ordinal] = true;
     }
     flags
-}
-
-struct CapturedRequestFactory<'a> {
-    trace: &'a AgenticTrace,
-    session_finals: Vec<bool>,
-    headers: Vec<Headers>,
-    dictionary: &'a TokenDictionary,
-    client: reqwest::Client,
-    target: String,
-    run_id: String,
-    options: Arc<ReplayOptions>,
-}
-
-impl CapturedRequestFactory<'_> {
-    fn prepare(&self, ordinal: usize) -> Result<PreparedRequest> {
-        let turn = self
-            .trace
-            .turns
-            .get(ordinal)
-            .with_context(|| format!("agentic replay turn {ordinal} is missing"))?;
-        prepare_request(
-            &self.client,
-            &self.target,
-            &self.run_id,
-            &self.options,
-            self.dictionary,
-            turn.request.clone(),
-            RequestExecution {
-                headers: self.headers[ordinal].clone(),
-                output_budget_tokens: Some(turn.request.output_tokens),
-                compaction_attempt: None,
-                session_final: self.session_finals[ordinal],
-            },
-        )
-    }
 }

@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::scenario::config::UIntDistribution;
+use crate::scenario::config::{ResolvedLoad, UIntDistribution};
 
 fn config() -> ResolvedGeneratorConfig {
     let mut config = ResolvedGeneratorConfig::defaults(42);
-    config.num_sessions = 3;
-    config.concurrent_sessions = 3;
+    config.load = ResolvedLoad::streams(3, 3);
     config.turns = UIntDistribution::fixed(4);
     config.subagent_turns = UIntDistribution::fixed(2);
     config.system_prefix_tokens = UIntDistribution::fixed(64);
@@ -91,8 +90,7 @@ fn profile_preserves_global_prefix_sharing() {
 #[test]
 fn compaction_rewrites_a_window_and_emits_metadata() {
     let mut config = config();
-    config.num_sessions = 1;
-    config.concurrent_sessions = 1;
+    config.load = ResolvedLoad::streams(1, 1);
     config.context_window_tokens = 160;
     config.compaction_trigger_fraction = 0.75;
     let scenario = GeneratedScenario::generate(config).unwrap();
@@ -116,8 +114,7 @@ fn compaction_rewrites_a_window_and_emits_metadata() {
 #[test]
 fn compaction_attempts_share_identity_and_apply_once() {
     let mut config = config();
-    config.num_sessions = 1;
-    config.concurrent_sessions = 1;
+    config.load = ResolvedLoad::streams(1, 1);
     config.context_window_tokens = 160;
     config.compaction_trigger_fraction = 0.75;
     config.compaction_abort_probability = 1.0;
@@ -151,15 +148,14 @@ fn compaction_attempts_share_identity_and_apply_once() {
         attempt.operation_id == operation.operation_id
             && attempt.phase == operation.phase
             && attempt.attempt == index + 1
-            && node.output_budget_tokens.is_none()
+            && node.output_budget_tokens.is_some_and(|budget| budget > 0)
     }));
 }
 
 #[test]
 fn blocking_swarm_joins_all_children() {
     let mut config = config();
-    config.num_sessions = 1;
-    config.concurrent_sessions = 1;
+    config.load = ResolvedLoad::streams(1, 1);
     config.turns = UIntDistribution::fixed(2);
     config.subagent_turns = UIntDistribution::fixed(1);
     config.tool_probability = 0.0;
@@ -176,7 +172,7 @@ fn blocking_swarm_joins_all_children() {
         scenario.session_topology,
         GeneratedSessionTopology {
             configured_top_level_sessions: 1,
-            configured_concurrent_sessions: 1,
+            configured_concurrent_sessions: Some(1),
             generated_subagent_sessions: 3,
             total_protocol_sessions: 4,
         }
@@ -213,7 +209,13 @@ fn blocking_swarm_joins_all_children() {
 #[test]
 fn closed_loop_stream_restarts_after_its_previous_top_level_session_completes() {
     let mut config = config();
-    config.concurrent_sessions = 1;
+    config.load = ResolvedLoad::Streams {
+        num_sessions: Some(3),
+        concurrent_sessions: 1,
+        startup_interval_ms: 0,
+        restart_delay_ms: UIntDistribution::fixed(17),
+        duration_minutes: None,
+    };
     config.turns = UIntDistribution::fixed(1);
     config.tool_probability = 0.0;
     config.parallel_tool_probability = 0.0;
@@ -221,7 +223,6 @@ fn closed_loop_stream_restarts_after_its_previous_top_level_session_completes() 
     config.swarm_probability = 0.0;
     config.completion_probability = 0.0;
     config.compaction_enabled = false;
-    config.restart_delay_ms = UIntDistribution::fixed(17);
 
     let scenario = GeneratedScenario::generate(config).unwrap();
     assert_eq!(scenario.nodes.len(), 3);
@@ -243,8 +244,7 @@ fn closed_loop_stream_restarts_after_its_previous_top_level_session_completes() 
 #[test]
 fn reports_call_and_time_weighted_tool_parallelism() {
     let mut config = config();
-    config.num_sessions = 1;
-    config.concurrent_sessions = 1;
+    config.load = ResolvedLoad::streams(1, 1);
     config.turns = UIntDistribution::fixed(2);
     config.tool_probability = 0.0;
     config.parallel_tool_probability = 1.0;
@@ -268,4 +268,125 @@ fn reports_call_and_time_weighted_tool_parallelism() {
     assert_eq!(scenario.tool_parallelism.parallel_wall_ms, 10);
     assert_eq!(scenario.tool_parallelism.parallel_wall_time_fraction, 1.0);
     assert_eq!(scenario.tool_parallelism.work_to_wall_ratio, 3.0);
+}
+
+#[test]
+fn trees_plan_the_same_alone_as_in_the_full_graph() {
+    let planner = TreePlanner::new(config()).unwrap();
+    let scenario = GeneratedScenario::generate(config()).unwrap();
+    let mut offset = 0;
+    for index in 0..3 {
+        let tree = planner.plan_tree(index).unwrap();
+        for (local, node) in tree.nodes.iter().enumerate() {
+            let joined = &scenario.nodes[offset + local];
+            assert_eq!(node.node_id, joined.node_id);
+            assert_eq!(
+                node.request.input_sequence_hashes,
+                joined.request.input_sequence_hashes
+            );
+        }
+        offset += tree.nodes.len();
+    }
+    // Planning out of order does not change a tree.
+    let late = planner.plan_tree(2).unwrap();
+    let early = TreePlanner::new(config()).unwrap().plan_tree(2).unwrap();
+    assert_eq!(
+        serde_json::to_value(&late).unwrap(),
+        serde_json::to_value(&early).unwrap()
+    );
+}
+
+fn arrivals(rate_unit: RateUnit, rates: Vec<f64>, interpolation: Interpolation) -> ResolvedLoad {
+    ResolvedLoad::Arrivals {
+        bucket_minutes: 1.0,
+        rate_unit,
+        rates,
+        interpolation,
+    }
+}
+
+#[test]
+fn arrival_schedules_follow_each_bucket_rate() {
+    let mut config = config();
+    config.load = arrivals(
+        RateUnit::SessionsPerMinute,
+        vec![600.0, 0.0, 1200.0],
+        Interpolation::Step,
+    );
+    let planner = TreePlanner::new(config.clone()).unwrap();
+    let arrival_ms = &planner.arrivals().unwrap().arrival_ms;
+    assert!(arrival_ms.windows(2).all(|pair| pair[0] <= pair[1]));
+    let per_bucket = |bucket: u64| {
+        arrival_ms
+            .iter()
+            .filter(|ms| **ms / 60_000 == bucket)
+            .count() as f64
+    };
+    assert!((per_bucket(0) - 600.0).abs() < 100.0);
+    assert_eq!(per_bucket(1), 0.0);
+    assert!((per_bucket(2) - 1200.0).abs() < 150.0);
+    assert_eq!(planner.tree_count(), Some(arrival_ms.len()));
+    assert_eq!(
+        TreePlanner::new(config)
+            .unwrap()
+            .arrivals()
+            .unwrap()
+            .arrival_ms,
+        *arrival_ms
+    );
+}
+
+#[test]
+fn linear_arrivals_ramp_between_bucket_midpoints() {
+    let mut config = config();
+    config.load = arrivals(
+        RateUnit::SessionsPerMinute,
+        vec![0.0, 1200.0],
+        Interpolation::Linear,
+    );
+    let planner = TreePlanner::new(config).unwrap();
+    let arrival_ms = &planner.arrivals().unwrap().arrival_ms;
+    let first_half = arrival_ms.iter().filter(|ms| **ms < 30_000).count();
+    let second_half = arrival_ms
+        .iter()
+        .filter(|ms| (30_000..60_000).contains(*ms))
+        .count();
+    let last_half = arrival_ms.iter().filter(|ms| **ms >= 90_000).count();
+    assert_eq!(first_half, 0);
+    assert!(second_half > 0 && second_half < last_half);
+}
+
+#[test]
+fn request_rates_convert_to_session_arrivals() {
+    let mut config = config();
+    config.load = arrivals(RateUnit::RequestsPerSecond, vec![20.0], Interpolation::Step);
+    let planner = TreePlanner::new(config).unwrap();
+    let plan = planner.arrivals().unwrap();
+    let per_tree = plan.calibration_requests_per_tree.unwrap();
+    assert!(per_tree >= 1.0);
+    let expected_sessions = 20.0 * 60.0 / per_tree;
+    assert!((plan.sessions_per_minute[0] - expected_sessions).abs() < 1e-9);
+    let sessions = plan.arrival_ms.len() as f64;
+    assert!((sessions - expected_sessions).abs() < expected_sessions * 0.3);
+}
+
+#[test]
+fn unbounded_streams_plan_lazily_but_not_as_one_graph() {
+    let mut config = config();
+    config.load = ResolvedLoad::Streams {
+        num_sessions: None,
+        concurrent_sessions: 2,
+        startup_interval_ms: 0,
+        restart_delay_ms: UIntDistribution::fixed(0),
+        duration_minutes: Some(5.0),
+    };
+    let planner = TreePlanner::new(config.clone()).unwrap();
+    assert_eq!(planner.tree_count(), None);
+    assert!(planner.plan_tree(1_000_000).is_ok());
+    assert!(
+        GeneratedScenario::generate(config)
+            .unwrap_err()
+            .to_string()
+            .contains("duration_minutes")
+    );
 }

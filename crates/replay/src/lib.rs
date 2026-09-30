@@ -21,26 +21,15 @@ mod generated;
 mod headers;
 mod request;
 
-pub mod telemetry;
 pub mod token_shape;
 
 pub use captured::run_agentic_replay;
-pub use generated::run_generated_scenario;
+pub use generated::run_generated;
 
 pub use agent_loadgen_core::Percentiles;
 
 #[cfg(test)]
-use artifacts::{RunAccumulator, dispatch_timing_matches};
-#[cfg(test)]
 use request::{chunk_contains_output, normalize_target};
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
-#[serde(rename_all = "kebab-case")]
-pub enum HttpTransport {
-    Auto,
-    Http2PriorKnowledge,
-}
 
 #[derive(Debug, Clone)]
 pub struct ReplayOptions {
@@ -51,17 +40,12 @@ pub struct ReplayOptions {
     pub target: String,
     pub output_dir: PathBuf,
     pub max_in_flight: usize,
-    pub warmup_connections: usize,
-    pub http_transport: HttpTransport,
-    pub result_flush_interval: usize,
-    pub max_dispatch_p99_ms: f64,
-    pub max_dispatch_max_ms: f64,
-    pub start_delay: Duration,
     pub timeout: Duration,
+    /// Divide recorded offsets and delays by this value.
     pub time_scale: f64,
-    pub token_path_verified: bool,
-    pub engine_cache_mode: BTreeMap<String, String>,
     pub static_headers: Vec<(String, String)>,
+    /// Stop dispatching after this long, wait for in-flight requests, and end.
+    pub stop_after: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -103,20 +87,13 @@ pub struct RunSummary {
     pub target: String,
     pub time_scale: f64,
     pub max_in_flight: usize,
-    pub warmup_connections: usize,
-    pub http_transport: HttpTransport,
-    pub result_flush_interval: usize,
-    pub max_dispatch_p99_ms: f64,
-    pub max_dispatch_max_ms: f64,
+    /// HTTP version of the connection to the target: `h2c`, `http/1.1`, or `h2`.
+    pub http_version: &'static str,
     pub timer_backend: &'static str,
     pub static_header_names: Vec<String>,
     pub protocol_surface: &'static str,
     pub traffic_kind: TrafficKind,
     pub scheduling_model: &'static str,
-    pub token_path_verified: bool,
-    pub engine_cache_mode: BTreeMap<String, String>,
-    pub capacity_performance_conclusions_allowed: bool,
-    pub conclusion_blockers: Vec<String>,
     pub source: TraceManifest,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_topology: Option<GeneratedSessionTopology>,
@@ -135,10 +112,25 @@ pub struct RunSummary {
     pub scheduler_wake_lag_ms: Percentiles,
     pub dispatch_lag_ms: Percentiles,
     pub local_admission_lag_ms: Percentiles,
-    pub request_fidelity_matches: bool,
-    pub dispatch_timing_matches: bool,
+    pub performance: Performance,
+    /// The run reached `stop_after` before sending every planned request.
+    pub stopped_early: bool,
+    /// Every sent request succeeded with its planned output length.
     pub passed: bool,
     pub total_time_ms: f64,
+}
+
+/// Target performance observed by the client over the whole run.
+#[derive(Debug, Clone, Serialize)]
+pub struct Performance {
+    pub requests_per_second: f64,
+    pub input_tokens_per_second: f64,
+    pub output_tokens_per_second: f64,
+    /// Time to the first streamed output token.
+    pub ttft_ms: Percentiles,
+    pub request_latency_ms: Percentiles,
+    /// Mean time per output token after the first, per request.
+    pub tpot_ms: Percentiles,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

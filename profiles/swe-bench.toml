@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# A SWE-bench Verified evaluation: 500 independent tasks run by 32 concurrent
+# agent workers. Each task is one prompt followed by a long, almost entirely
+# serial bash/read/edit loop with no human pauses and no subagents.
+#
+# Evidence: 32 Harbor trajectories (1,262 model turns) of a Pi agent on
+# MiniMax-M2: turns p50 36 and max 100; 97.7% of responses call tools and 3.6%
+# of tool phases are parallel; bash/read/edit are 66%/26%/8% of calls; first
+# prompts p50 1.6k tokens, final prompts p50 22k; outputs p50 102, p90 461,
+# p99 991. Tool latencies were not separable from model time and are
+# assumptions. The system prompt and tool catalog match that small harness;
+# raise them to model Claude Code (~26k) or Codex (~20k) running the benchmark.
+
+schema_version = 5
+seed = 42
+
+[load]
+num_sessions = 500
+concurrent_sessions = 32
+restart_delay_ms = { kind = "uniform", min = 1000, max = 5000 }
+
+[trajectory]
+turns = { kind = "log_normal", median = 36.0, sigma = 0.6, min = 12, max = 100 }
+think_time_ms = { kind = "log_normal", median = 20.0, sigma = 0.5, min = 1, max = 500 }
+output_tokens = { kind = "log_normal", median = 102.0, sigma = 1.1, min = 16, max = 2048 }
+
+[tokens]
+system_prefix_tokens = { kind = "fixed", value = 700 }
+tool_catalog_tokens = { kind = "fixed", value = 400 }
+repository_tokens = { kind = "fixed", value = 0 }
+session_tokens = { kind = "uniform", min = 64, max = 256 }
+user_tokens = { kind = "log_normal", median = 500.0, sigma = 0.7, min = 64, max = 6000 }
+context_window_tokens = 196000
+
+[behavior]
+tool_probability = 0.94
+parallel_tool_probability = 0.036
+subagent_probability = 0.0
+swarm_probability = 0.0
+completion_probability = 0.0
+
+[compaction]
+trigger_fraction = 0.9
+
+[subagents]
+max_depth = 0
+
+[tools]
+parallel_count = { kind = "uniform", min = 2, max = 3 }
+
+[[tools.classes]]
+name = "shell"
+weight = 0.66
+latency_ms = { kind = "log_normal", median = 1500.0, sigma = 1.3, min = 20, max = 180000 }
+result_tokens = { kind = "log_normal", median = 122.0, sigma = 1.4, min = 8, max = 16000 }
+error_probability = 0.15
+
+[[tools.classes]]
+name = "read"
+weight = 0.26
+latency_ms = { kind = "log_normal", median = 15.0, sigma = 0.5, min = 2, max = 500 }
+result_tokens = { kind = "log_normal", median = 430.0, sigma = 1.0, min = 16, max = 8000 }
+error_probability = 0.02
+
+[[tools.classes]]
+name = "patch"
+weight = 0.08
+latency_ms = { kind = "log_normal", median = 20.0, sigma = 0.5, min = 2, max = 500 }
+result_tokens = { kind = "log_normal", median = 36.0, sigma = 0.6, min = 8, max = 1000 }
+error_probability = 0.05

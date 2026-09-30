@@ -86,7 +86,7 @@ Response:
 }
 ```
 
-`timeline.nodes[].a` uses the action names from `scenario.json` (`text`, `tool`, `parallel_tools`, `subagent`, `swarm`, `complete`); `out` is the output budget when present, else the request's output tokens; `wait` is the summed tool latency; `spawn` lists spawned session indices.
+`timeline.nodes[].a` uses the action names from `scenario.json` (`text`, `tool`, `parallel_tools`, `subagent`, `swarm`, `compaction_attempt`, `complete`); `out` is the output budget when present, else the request's output tokens; `wait` is the summed tool latency; `spawn` lists spawned session indices.
 
 Artifacts under the job directory: `config.toml`, `plan.dot` (always), `plan.svg` (Graphviz on `PATH` and at most 500 nodes), `scenario.json.gz` (when the pretty-printed scenario is at most 64 MiB; larger scenarios are regenerated from `config.toml` on the first `GET`), and `plan.json` (the response, used by the cache).
 

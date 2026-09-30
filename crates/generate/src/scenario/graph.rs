@@ -101,11 +101,14 @@ pub fn render_plan_dot(scenario: &GeneratedScenario) -> Result<String> {
         dot,
         "  edge [fontname=\"Helvetica\", fontsize=9, color=\"#6b7280\", arrowsize=0.7];"
     )?;
+    let starts = match scenario.session_topology.configured_concurrent_sessions {
+        Some(streams) => format!("{streams} concurrent streams"),
+        None => "open-loop arrivals".to_string(),
+    };
     writeln!(
         dot,
-        "  label=\"agent-loadgen generated plan\\n{} top-level session trees · {} concurrent streams · {} child sessions · {} model requests\";",
+        "  label=\"agent-loadgen generated plan\\n{} top-level session trees · {starts} · {} child sessions · {} model requests\";",
         scenario.session_topology.configured_top_level_sessions,
-        scenario.session_topology.configured_concurrent_sessions,
         scenario.session_topology.generated_subagent_sessions,
         scenario.nodes.len()
     )?;
@@ -353,13 +356,12 @@ fn action_color(action: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenario::config::UIntDistribution;
+    use crate::scenario::config::{ResolvedLoad, UIntDistribution};
     use crate::scenario::{GeneratedScenario, GeneratorConfig, ResolvedGeneratorConfig};
 
     fn swarm_config(blocking_probability: f64) -> ResolvedGeneratorConfig {
         let mut config = ResolvedGeneratorConfig::defaults(7);
-        config.num_sessions = 1;
-        config.concurrent_sessions = 1;
+        config.load = ResolvedLoad::streams(1, 1);
         config.turns = UIntDistribution::fixed(2);
         config.subagent_turns = UIntDistribution::fixed(1);
         config.tool_probability = 0.0;
@@ -400,7 +402,7 @@ mod tests {
     #[test]
     fn graph_marks_top_level_stream_restart() {
         let mut config = swarm_config(0.0);
-        config.num_sessions = 2;
+        config.load = ResolvedLoad::streams(2, 1);
         config.turns = UIntDistribution::fixed(1);
         config.swarm_probability = 0.0;
         let scenario = GeneratedScenario::generate(config).unwrap();
