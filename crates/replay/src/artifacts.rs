@@ -18,6 +18,9 @@ use crate::token_shape::TokenDictionaryManifest;
 use agent_loadgen_core::TraceManifest;
 use agent_loadgen_generate::scenario::CompactionExpectedEffect;
 
+/// Width of each `timeline.csv` row.
+const TIMELINE_BUCKET_MS: f64 = 60_000.0;
+
 pub(super) struct ResultSink {
     writer: BufWriter<File>,
     flush_interval: usize,
@@ -30,18 +33,15 @@ impl ResultSink {
         path: &Path,
         flush_interval: usize,
         dispatch_p99_limit_ms: f64,
-        timeline_bucket: Duration,
     ) -> Result<Self> {
         let writer = BufWriter::new(
             File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
         );
-        let mut accumulator = RunAccumulator::new(dispatch_p99_limit_ms)?;
-        accumulator.timeline_bucket_ms = millis(timeline_bucket);
         Ok(Self {
             writer,
             flush_interval,
             records_since_flush: 0,
-            accumulator,
+            accumulator: RunAccumulator::new(dispatch_p99_limit_ms)?,
         })
     }
 
@@ -86,7 +86,6 @@ pub(super) struct RunAccumulator {
     tpot_us: Histogram<u64>,
     input_tokens: u64,
     output_tokens: u64,
-    timeline_bucket_ms: f64,
     timeline: Vec<TimelineBucket>,
     /// Root sessions already counted in the timeline.
     sessions_seen: HashSet<String>,
@@ -128,7 +127,6 @@ impl RunAccumulator {
             tpot_us: Histogram::new(3)?,
             input_tokens: 0,
             output_tokens: 0,
-            timeline_bucket_ms: 60_000.0,
             timeline: Vec::new(),
             sessions_seen: HashSet::new(),
         })
@@ -182,7 +180,7 @@ impl RunAccumulator {
         let output_tokens = result.observed_output_tokens.unwrap_or(0);
         self.input_tokens += result.expected_input_tokens as u64;
         self.output_tokens += output_tokens;
-        let bucket = (result.dispatch_offset_ms / self.timeline_bucket_ms) as usize;
+        let bucket = (result.dispatch_offset_ms / TIMELINE_BUCKET_MS) as usize;
         if self.timeline.len() <= bucket {
             self.timeline
                 .resize_with(bucket + 1, TimelineBucket::default);
@@ -241,7 +239,7 @@ pub(super) fn write_timeline(path: &Path, accumulator: &RunAccumulator) -> Resul
         writer,
         "start_s,requests,failed,root_sessions_started,requests_per_s,input_tokens_per_s,output_tokens_per_s,ttft_p50_ms,ttft_p99_ms,latency_p50_ms,latency_p99_ms"
     )?;
-    let seconds = accumulator.timeline_bucket_ms / 1000.0;
+    let seconds = TIMELINE_BUCKET_MS / 1000.0;
     for (index, bucket) in accumulator.timeline.iter().enumerate() {
         let ttft = sorted(&bucket.ttft_ms);
         let latency = sorted(&bucket.latency_ms);
@@ -389,7 +387,6 @@ pub(super) fn summarize(
         dispatch_lag_ms,
         local_admission_lag_ms,
         performance: accumulator.performance(elapsed),
-        timeline_bucket_seconds: accumulator.timeline_bucket_ms / 1000.0,
         stopped_early,
         request_fidelity_matches,
         dispatch_timing_matches,

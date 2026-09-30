@@ -92,30 +92,14 @@ pub struct FidelityArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct RunOutputArgs {
-    /// Width in seconds of each timeline.csv row.
-    #[arg(long, default_value_t = 60.0)]
-    pub timeline_seconds: f64,
-
-    /// Mix this value into token content so the run does not reuse KV cached by
-    /// earlier runs. Defaults to a random value; 0 sends the planned content.
-    #[arg(long)]
-    pub token_salt: Option<u64>,
-
+pub struct RunArgs {
     /// Stop sending after this many minutes, let in-flight requests finish, and
     /// report the requests that were sent.
     #[arg(long)]
     pub stop_after_minutes: Option<f64>,
 }
 
-impl RunOutputArgs {
-    pub fn timeline_bucket(&self) -> Result<std::time::Duration> {
-        if !self.timeline_seconds.is_finite() || self.timeline_seconds <= 0.0 {
-            bail!("--timeline-seconds must be a positive number");
-        }
-        Ok(std::time::Duration::from_secs_f64(self.timeline_seconds))
-    }
-
+impl RunArgs {
     pub fn stop_after(&self) -> Result<Option<std::time::Duration>> {
         self.stop_after_minutes
             .map(|minutes| {
@@ -125,11 +109,6 @@ impl RunOutputArgs {
                 Ok(std::time::Duration::from_secs_f64(minutes * 60.0))
             })
             .transpose()
-    }
-
-    pub fn token_salt(&self) -> u64 {
-        self.token_salt
-            .unwrap_or_else(|| uuid::Uuid::new_v4().as_u64_pair().0)
     }
 }
 
@@ -225,7 +204,7 @@ pub enum Command {
         static_headers: Vec<String>,
 
         #[command(flatten)]
-        run: RunOutputArgs,
+        run: RunArgs,
     },
 
     /// Summarize a profile's traffic, and its request graph when small, without sending it.
@@ -315,7 +294,7 @@ pub enum Command {
         static_headers: Vec<String>,
 
         #[command(flatten)]
-        run: RunOutputArgs,
+        run: RunArgs,
     },
 
     /// Compare a source trace with a trace captured during replay.

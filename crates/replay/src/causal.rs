@@ -95,7 +95,6 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
             &options.output_dir.join("requests.jsonl"),
             options.result_flush_interval,
             options.max_dispatch_p99_ms,
-            options.timeline_bucket,
         )?,
         base,
         time_scale: options.time_scale,

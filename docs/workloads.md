@@ -89,12 +89,12 @@ Generation plans each session tree shortly before it starts and drops it when it
 
 - `--headers claude-code` or `--headers codex` selects the harness headers. See [Harness headers](headers.md).
 - `--stop-after-minutes N` stops sending after N minutes, lets in-flight requests finish, and reports the requests that were sent. Use it to cut the tail of sessions still running after a schedule ends, or to fit a run into a time slot.
-- `--token-salt` defaults to a random value per run. It changes session content after the shared prefix, so a second run of the same profile does not hit KV cached by the first; the synthetic system prompt and tool catalog stay identical across runs, as they would for a real harness. Pass `--token-salt 0` to send the planned content.
+- Each run mixes a fresh salt into session content after the shared prefix, so a second run of the same profile does not hit KV cached by the first; the synthetic system prompt and tool catalog stay identical across runs, as they would for a real harness.
 - Generated session IDs on the wire are UUIDs unique to the run.
 - `--time-scale` divides every client delay and arrival offset. It plays a schedule faster and also raises the arrival rate. To see a whole day in less time at its real load level, shrink `bucket_minutes` instead.
 
 ## 5. Read the results
 
 - `run.json` records the header dialect, request and error counts, output-length fidelity, dispatch lag, and `performance`: achieved requests and tokens per second, and TTFT, request latency, and time per output token percentiles.
-- `timeline.csv` has one row per `--timeline-seconds` bucket (default 60): requests, failures, root sessions started, request and token rates, and TTFT and latency percentiles. Compare it with `plan-summary.json`'s arrival buckets.
+- `timeline.csv` has one row per minute: requests, failures, root sessions started, request and token rates, and TTFT and latency percentiles. Compare it with `plan-summary.json`'s arrival buckets.
 - `requests.jsonl` has one row per request. Its `replay_request_id` is the request's `x-request-id`, which joins it with Dynamo request traces and engine telemetry.

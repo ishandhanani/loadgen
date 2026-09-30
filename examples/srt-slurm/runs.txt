@@ -1,5 +1,4 @@
-# name          subcommand args (run.sh adds --model, --target, --tokenizer, and --output)
-smoke           generate --config /loadgen/profiles/smoke.toml --headers claude-code
-swe-c16         generate --config /loadgen/profiles/swe-bench-c16.toml --headers codex --stop-after-minutes 25
-claude-fleet    generate --config /loadgen/profiles/claude-fleet.toml --headers claude-code --stop-after-minutes 25
-astra-c32       replay /loadgen/pool/sessions.jsonl.gz --load /loadgen/loads/streams-32.toml --headers codex --stop-after-minutes 22
+# name        subcommand and flags (run.sh adds --model, --target, --tokenizer, and --output)
+smoke         generate --config /loadgen/profiles/smoke.toml --headers claude-code
+swe-c16       generate --config /loadgen/profiles/swe-bench-c16.toml --headers codex --stop-after-minutes 25
+claude-fleet  generate --config /loadgen/profiles/claude-fleet.toml --headers claude-code --stop-after-minutes 25

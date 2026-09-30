@@ -62,11 +62,6 @@ pub struct ReplayOptions {
     pub token_path_verified: bool,
     pub engine_cache_mode: BTreeMap<String, String>,
     pub static_headers: Vec<(String, String)>,
-    /// Width of each `timeline.csv` bucket.
-    pub timeline_bucket: Duration,
-    /// Mixed into generated token content so runs do not share cached KV.
-    /// Zero keeps the planned token content.
-    pub token_salt: u64,
     /// Stop dispatching after this long, wait for in-flight requests, and end.
     pub stop_after: Option<Duration>,
 }
@@ -143,7 +138,6 @@ pub struct RunSummary {
     pub dispatch_lag_ms: Percentiles,
     pub local_admission_lag_ms: Percentiles,
     pub performance: Performance,
-    pub timeline_bucket_seconds: f64,
     /// The run reached `stop_after` before sending every planned request.
     pub stopped_early: bool,
     pub request_fidelity_matches: bool,

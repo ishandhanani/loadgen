@@ -180,8 +180,6 @@ async fn replay_sends_shape_and_agent_headers() {
             token_path_verified: false,
             engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
-            timeline_bucket: Duration::from_secs(60),
-            token_salt: 0,
             stop_after: None,
         },
     )
@@ -313,8 +311,6 @@ async fn recorded_scheduler_handles_tied_millisecond_arrivals() {
             token_path_verified: false,
             engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
-            timeline_bucket: Duration::from_secs(60),
-            token_salt: 0,
             stop_after: None,
         },
     )
@@ -424,8 +420,6 @@ async fn captured_successor_waits_for_actual_completion_plus_recorded_gap() {
             token_path_verified: false,
             engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
-            timeline_bucket: Duration::from_secs(60),
-            token_salt: 0,
             stop_after: None,
         },
     )
@@ -517,8 +511,6 @@ async fn generated_graph_releases_tool_successor_after_completion() {
             token_path_verified: false,
             engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
-            timeline_bucket: Duration::from_secs(60),
-            token_salt: 0,
             stop_after: None,
         },
     )
@@ -628,8 +620,6 @@ async fn generated_claude_headers_reach_the_wire() {
             token_path_verified: false,
             engine_cache_mode: BTreeMap::new(),
             static_headers: Vec::new(),
-            timeline_bucket: Duration::from_secs(60),
-            token_salt: 0,
             stop_after: None,
         },
     )
@@ -679,8 +669,6 @@ fn harness_headers_cannot_be_overridden_with_static_headers() {
         token_path_verified: false,
         engine_cache_mode: BTreeMap::new(),
         static_headers: Vec::new(),
-        timeline_bucket: Duration::from_secs(60),
-        token_salt: 0,
         stop_after: None,
     };
     for name in [
@@ -719,8 +707,6 @@ fn quick_options(target: String, output: &std::path::Path, time_scale: f64) -> R
         token_path_verified: false,
         engine_cache_mode: BTreeMap::new(),
         static_headers: Vec::new(),
-        timeline_bucket: Duration::from_millis(500),
-        token_salt: 7,
         stop_after: None,
     }
 }
@@ -788,7 +774,7 @@ async fn arrival_schedule_starts_every_planned_tree() {
     assert!(summary.total_time_ms >= 1_000.0);
     let timeline = std::fs::read_to_string(output.path().join("timeline.csv")).unwrap();
     assert!(timeline.starts_with("start_s,requests,"));
-    assert!(timeline.lines().count() >= 3);
+    assert_eq!(timeline.lines().count(), 2);
     server.abort();
 }
 

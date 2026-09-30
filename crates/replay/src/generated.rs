@@ -37,8 +37,11 @@ pub async fn run_generated(
 
     let client = build_http_client(&options)?;
     let target = normalize_target(&options.target);
-    let run_id = Uuid::new_v4().to_string();
-    let dictionary = dictionary.with_salt(options.token_salt, planner.shared_prefix_blocks());
+    let run_id = Uuid::new_v4();
+    // A fresh salt per run keeps a repeated run from reusing KV cached by an
+    // earlier one, while the shared system prompt and tool catalog stay warm.
+    let dictionary = dictionary.with_salt(run_id.as_u64_pair().0, planner.shared_prefix_blocks());
+    let run_id = run_id.to_string();
     let token_manifest = dictionary.manifest().clone();
     let options = Arc::new(options);
     let mut workload = GeneratedWorkload {

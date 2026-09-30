@@ -36,7 +36,6 @@ pub async fn run_agentic_replay(
     let client = build_http_client(&options)?;
     let target = normalize_target(&options.target);
     let run_id = Uuid::new_v4().to_string();
-    let dictionary = dictionary.with_salt(options.token_salt, 0);
     let token_manifest = dictionary.manifest().clone();
     let options = Arc::new(options);
     let session_finals = session_final_flags(&trace);

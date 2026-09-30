@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # agent-loadgen as an srt-slurm custom benchmark. Each line of the run list is
-# "name subcommand args...": `generate --config ...` or `replay <trace> --load ...`.
+# "name subcommand flags...", such as `smoke generate --config ... --headers codex`.
 # The script adds the target, model, tokenizer, and output directory.
 set -uo pipefail
 L=/loadgen
@@ -18,7 +18,7 @@ while read -r name subcommand args; do
   # shellcheck disable=SC2086
   "$OUT/agent-loadgen" $subcommand $args \
     --model "${LOADGEN_MODEL:?}" --target "$TARGET" --tokenizer /model \
-    --output "$OUT/$name" --max-in-flight 4096 --timeline-seconds 30 \
+    --output "$OUT/$name" --max-in-flight 4096 \
     --max-dispatch-p99-ms 100 --max-dispatch-max-ms 2000 \
     > "$OUT/$name/stdout.json" 2> "$OUT/$name/stderr.log"
   echo "=== end $name exit=$? $(date -u +%FT%TZ)"

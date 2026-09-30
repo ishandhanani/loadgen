@@ -101,8 +101,6 @@ async fn main() -> Result<()> {
                         "engine cache mode",
                     )?,
                     static_headers: parse_headers(static_headers)?,
-                    timeline_bucket: run.timeline_bucket()?,
-                    token_salt: run.token_salt(),
                     stop_after: run.stop_after()?,
                 },
             )
@@ -165,8 +163,6 @@ async fn main() -> Result<()> {
                         "engine cache mode",
                     )?,
                     static_headers: parse_headers(static_headers)?,
-                    timeline_bucket: run.timeline_bucket()?,
-                    token_salt: run.token_salt(),
                     stop_after: run.stop_after()?,
                 },
             )
