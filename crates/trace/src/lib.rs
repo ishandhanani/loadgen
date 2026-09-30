@@ -16,7 +16,6 @@ use serde::de::IgnoredAny;
 use sha2::{Digest, Sha256};
 
 mod agentic;
-pub mod compare;
 
 pub use agentic::{AgenticToolEvent, AgenticTrace, AgenticTurn};
 

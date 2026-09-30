@@ -97,7 +97,7 @@ It reads dashboard data under `--root`, scans the request-trace object store wit
 - [How it works](docs/how-it-works.md): timing models, dependency scheduling, subagents, request construction, and module boundaries.
 - [Workspace architecture](docs/workspace.md): crate ownership, dependency direction, and where to make a change.
 - [Harness headers](docs/headers.md): Claude Code and Codex session, subagent, compaction, and gateway hint headers.
-- [Trace replay](docs/replay.md): trace contract, token synthesis, timing gates, comparison, and telemetry joins.
+- [Trace replay](docs/replay.md): trace contract, token synthesis, and causal timing.
 - [Generator configuration](docs/generator.md): profiles, distributions, tools, and safety limits.
 - [Generator defaults](docs/presets.md): every resolved default, the header dialects, checked-in profile overrides, and why each baseline exists.
 - [Codex behavior and simulation controls](docs/codex-behavior.md): source-derived agent-loop behavior, interpretation of generator knobs, and known fidelity gaps.

@@ -146,13 +146,13 @@ See [Compaction](compaction.md) for trigger logic, attempt semantics, retained c
 - `ttft_ms`: time from dispatch to first output.
 - `total_time_ms`: time from dispatch to stream completion.
 
-Frontend-observed arrival is different from client dispatch. Capture a Dynamo request trace during replay and use `compare` to measure that path.
+Frontend-observed arrival is different from client dispatch. A Dynamo request trace captured during the run records it; join the two by `x-request-id`.
 
 ## Artifacts and claims
 
 `run.json` labels the protocol surface, traffic kind, token-path verification, and declared engine cache mode, and reports achieved throughput with TTFT, request latency, and time-per-output-token percentiles. `timeline.csv` breaks the same measurements into fixed time buckets. Capacity or performance conclusions are blocked unless token IDs are verified to reach the engine unchanged and cache mode is declared.
 
-Cache policy remains outside this project. `join-telemetry` only correlates request-scoped engine records.
+Cache policy remains outside this project.
 
 ## Crate map
 
@@ -172,9 +172,9 @@ Cache policy remains outside this project. `join-telemetry` only correlates requ
 | Crate | Responsibility |
 |---|---|
 | `agent-loadgen-core` | Public request and agent-context contracts, percentile summaries, and the stable ready-time queue. |
-| `agent-loadgen-trace` | Trace v1 parsing, agentic causal lowering, and source-versus-captured comparison. |
+| `agent-loadgen-trace` | Trace v1 parsing and agentic causal lowering. |
 | `agent-loadgen-generate` | Neutral defaults, strict TOML profile validation, seeded distributions, and generated scenario planning. |
-| `agent-loadgen-replay` | Token shaping, request transport, captured and generated causal schedulers, run artifacts, and telemetry joins. |
+| `agent-loadgen-replay` | Token shaping, request transport, harness headers, captured and generated causal schedulers, and run artifacts. |
 | `agent-loadgen` | CLI flags and command wiring only. |
 
 See [Workspace architecture](workspace.md) for the dependency rules and change-routing guide.

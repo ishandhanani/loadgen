@@ -90,32 +90,6 @@ target/release/agent-loadgen replay trace.jsonl.gz \
 
 `inspect` reports root count and dependency-edge count in addition to shape statistics. `run.json` labels captured runs with `scheduling_model: agentic_causal` and records the `header_dialect`.
 
-## Compare a captured replay
-
-Enable Dynamo request tracing while replay runs, then compare the source with the new trace:
-
-```bash
-target/release/agent-loadgen compare \
-  --source source-trace.jsonl.gz \
-  --replay captured-trace.jsonl.gz \
-  --requests artifacts/replay/requests.jsonl
-```
-
-Comparison checks exact input/output lengths, block size, agent context, canonical KV-prefix topology, and frontend arrival error relative to the causal client dispatch times recorded in `requests.jsonl`. It does not compare dependent requests against their original absolute arrivals, because replay latency is intentionally allowed to move them.
-
-## Engine telemetry
-
-Cache policy stays outside the load generator. Optional engine JSONL can be joined after a run:
-
-```bash
-target/release/agent-loadgen join-telemetry \
-  --requests artifacts/replay/requests.jsonl \
-  --engine-telemetry engine.jsonl \
-  --output artifacts/replay/requests-with-engine.jsonl
-```
-
-Records are matched across replay request ID, source `x_request_id`, and source request ID. Unknown fields are retained without interpreting engine policy.
-
 ## Limits
 
 - Parent/child headers identify session topology but not always exact request-level launch and join points. Timestamp inference is used when explicit tool evidence is absent.

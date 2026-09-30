@@ -5,10 +5,8 @@ use std::time::Duration;
 use agent_loadgen_generate::scenario::{
     GeneratorConfig, PlanSummary, TreePlanner, write_plan_graph,
 };
-use agent_loadgen_replay::telemetry::join_engine_telemetry;
 use agent_loadgen_replay::token_shape::TokenDictionary;
 use agent_loadgen_replay::{ReplayOptions, run_agentic_replay, run_generated};
-use agent_loadgen_trace::compare::{CompareOptions, compare_traces};
 use agent_loadgen_trace::load_agentic_trace;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -172,27 +170,6 @@ async fn main() -> Result<()> {
                 bail!("generated traffic failed request or dispatch-timing checks");
             }
         }
-        Command::Compare {
-            source,
-            replay,
-            requests,
-            max_arrival_p99_ms,
-            max_arrival_max_ms,
-        } => {
-            let report = compare_traces(
-                &source,
-                &replay,
-                &requests,
-                CompareOptions {
-                    max_arrival_p99_ms,
-                    max_arrival_max_ms,
-                },
-            )?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-            if !report.passed {
-                bail!("replay fidelity comparison failed");
-            }
-        }
         Command::Serve {
             root,
             listen,
@@ -220,14 +197,6 @@ async fn main() -> Result<()> {
                 },
             })
             .await?;
-        }
-        Command::JoinTelemetry {
-            requests,
-            engine_telemetry,
-            output,
-        } => {
-            let summary = join_engine_telemetry(&requests, &engine_telemetry, &output)?;
-            println!("{}", serde_json::to_string_pretty(&summary)?);
         }
     }
     Ok(())

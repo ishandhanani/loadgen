@@ -75,7 +75,7 @@ Dynamo request traces record these headers verbatim in `agent_context.agent_head
 
 A client abort proves only that the load generator canceled its wait. It does not prove that the router or engine avoided a cache mutation.
 
-Use request-scoped engine telemetry to prove cache effects. Join that telemetry after the run with `join-telemetry`. Cache policy remains outside agent-loadgen.
+Proving a cache effect takes request-scoped engine telemetry, joined to `requests.jsonl` by `x-request-id`. Cache policy remains outside agent-loadgen.
 
 ## Profile controls
 

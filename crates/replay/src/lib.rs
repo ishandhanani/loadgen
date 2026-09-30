@@ -21,7 +21,6 @@ mod generated;
 mod headers;
 mod request;
 
-pub mod telemetry;
 pub mod token_shape;
 
 pub use captured::run_agentic_replay;

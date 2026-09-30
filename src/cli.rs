@@ -297,29 +297,6 @@ pub enum Command {
         run: RunArgs,
     },
 
-    /// Compare a source trace with a trace captured during replay.
-    Compare {
-        /// Original Dynamo request trace files.
-        #[arg(long = "source", required = true)]
-        source: Vec<PathBuf>,
-
-        /// Dynamo request trace files captured during replay.
-        #[arg(long = "replay", required = true)]
-        replay: Vec<PathBuf>,
-
-        /// requests.jsonl from the replay run.
-        #[arg(long)]
-        requests: PathBuf,
-
-        /// Maximum allowed p99 frontend arrival error.
-        #[arg(long, default_value_t = 5.0)]
-        max_arrival_p99_ms: f64,
-
-        /// Maximum allowed frontend arrival error.
-        #[arg(long, default_value_t = 20.0)]
-        max_arrival_max_ms: f64,
-    },
-
     /// Serve plan previews and replay-bundle exports over HTTP for the traces dashboard.
     Serve {
         /// dynamo-traces root containing web/data; jobs go to <root>/loadgen-jobs (default ~/dynamo-traces).
@@ -342,20 +319,5 @@ pub enum Command {
         /// Newest job directories to keep; older ones are pruned.
         #[arg(long, default_value_t = 50)]
         keep_jobs: usize,
-    },
-
-    /// Join request results with normalized engine telemetry by request ID.
-    JoinTelemetry {
-        /// requests.jsonl from a replay or generated run.
-        #[arg(long)]
-        requests: PathBuf,
-
-        /// Engine telemetry JSONL. Repeat for more files.
-        #[arg(long = "engine-telemetry", required = true)]
-        engine_telemetry: Vec<PathBuf>,
-
-        /// Joined JSONL output path.
-        #[arg(long)]
-        output: PathBuf,
     },
 }
