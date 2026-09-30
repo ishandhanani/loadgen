@@ -1,5 +1,7 @@
 # agent-loadgen
 
+[![Watch the 78-second introduction: growing agent contexts, the KV-prefix trie, causal timing with subagents, arrival schedules, harness headers, and run artifacts](docs/assets/agent-loadgen-intro.jpg)](docs/assets/agent-loadgen-intro.mp4)
+
 `agent-loadgen` is a Rust load generator for coding-agent traffic through a Dynamo OpenAI-compatible frontend.
 
 It supports two workload modes:
