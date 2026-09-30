@@ -818,3 +818,54 @@ async fn connect_prefers_h2c_and_falls_back_to_http1() {
     assert_eq!(version, "http/1.1");
     server.abort();
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_blocked_result_file_does_not_delay_dispatch() {
+    use std::io::Read;
+
+    let (target, capture, server) = header_server().await;
+    // About 300 one-request sessions in 1.2 s, all released on time only if
+    // the scheduler never waits on the results file.
+    let config = GeneratorConfig::parse(&format!(
+        "schema_version = 5\nseed = 3\n[load.arrivals]\nbucket_minutes = 0.02\nsessions_per_minute = [15000]\n{ONE_TURN}"
+    ))
+    .unwrap();
+    let planner = TreePlanner::new(config.resolve().unwrap()).unwrap();
+    let requests = planner.tree_count().unwrap();
+    let dictionary = TokenDictionary::new(
+        16,
+        0,
+        SafeTokenAlphabet::from_unverified_range(100, 1024, &[]).unwrap(),
+    )
+    .unwrap();
+    let output = tempdir().unwrap();
+    // requests.jsonl is a pipe whose reader waits before draining it, so the
+    // writer blocks once the pipe buffer fills, like a stalled file system.
+    let fifo = output.path().join("requests.jsonl");
+    let path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let reader = std::thread::spawn(move || {
+        let mut file = std::fs::File::open(fifo).unwrap();
+        std::thread::sleep(Duration::from_millis(1500));
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();
+        contents.lines().count()
+    });
+    let summary = run_generated(
+        &planner,
+        dictionary,
+        quick_options(target, output.path(), 1.0),
+    )
+    .await
+    .unwrap();
+    assert_eq!(summary.request_count, requests);
+    assert_eq!(capture.0.lock().unwrap().len(), requests);
+    assert!(
+        summary.dispatch_lag_ms.max < 500.0,
+        "dispatch waited on the result file: {:?}",
+        summary.dispatch_lag_ms
+    );
+    assert_eq!(reader.join().unwrap(), requests);
+    server.abort();
+}

@@ -88,6 +88,7 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
         workload,
         live: HashMap::new(),
         loaded_nodes: 0,
+        completed: 0,
         next_scheduled: None,
         scheduled_exhausted: false,
         pending_starts: ReadyQueue::with_capacity(0),
@@ -195,17 +196,18 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
         }
     }
 
+    let elapsed = wall_started.elapsed();
     if !stopped_early && !scheduler.live.is_empty() {
         bail!(
             "{} graph stalled after {} of {} loaded requests",
             scheduler.workload.name(),
-            scheduler.sink.accumulator.request_count,
+            scheduler.completed,
             scheduler.loaded_nodes,
         );
     }
     Ok(CausalExecution {
-        accumulator: scheduler.sink.accumulator,
-        elapsed: wall_started.elapsed(),
+        accumulator: scheduler.sink.finish()?,
+        elapsed,
         stopped_early,
     })
 }
@@ -224,6 +226,7 @@ struct Scheduler<'a, W: CausalWorkload> {
     workload: &'a mut W,
     live: HashMap<usize, LiveChunk<W::Payload>>,
     loaded_nodes: usize,
+    completed: usize,
     /// The workload's next scheduled chunk, peeked before it is due.
     next_scheduled: Option<(u64, usize)>,
     scheduled_exhausted: bool,
@@ -364,6 +367,7 @@ impl<W: CausalWorkload> Scheduler<'_, W> {
     ) -> Result<()> {
         let completed_ns = duration_ns(completed_at.saturating_duration_since(self.base));
         self.sink.record(result)?;
+        self.completed += 1;
         if self.stopped {
             return Ok(());
         }

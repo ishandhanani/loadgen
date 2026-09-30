@@ -30,7 +30,7 @@ Both modes use the same request and result path:
 2. Send the IDs through `nvext.token_data` with valid dummy Chat Completions messages.
 3. Add the harness session, subagent, and compaction headers of the `--headers` dialect, plus `x-dynamo-session-final` on a session's last request when `--dynamo-session-final` is set.
 4. Stream the response and record TTFT, completion usage, status, and selected Dynamo headers.
-5. Append the result to `requests.jsonl` and update bounded timing histograms.
+5. Hand the result to a dedicated writer thread, which appends it to `requests.jsonl` and updates the run statistics, so a slow disk never delays scheduling.
 
 Equal source block hashes always produce equal synthetic token blocks. Different hashes receive different codewords within the validated dictionary capacity. This preserves KV-prefix equality without preserving prompt text or production token IDs.
 

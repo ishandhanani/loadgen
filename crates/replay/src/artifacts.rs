@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -21,31 +23,61 @@ use agent_loadgen_generate::scenario::CompactionExpectedEffect;
 /// Width of each `timeline.csv` row.
 const TIMELINE_BUCKET_MS: f64 = 60_000.0;
 
-/// Writes `requests.jsonl` one flushed line per completed request, so a
-/// running load can be followed from the file.
+/// Records completed requests on a dedicated thread.
+///
+/// Writing `requests.jsonl` can block for seconds on a slow or network file
+/// system, and the scheduler must never wait on it: a 13-second NFS stall on
+/// the scheduling task once held back every due request. The writer thread
+/// owns the file and the run statistics, writes results as they arrive, and
+/// flushes whenever it catches up, so a running load can be followed from the
+/// file.
 pub(super) struct ResultSink {
-    writer: BufWriter<File>,
-    pub(super) accumulator: RunAccumulator,
+    sender: mpsc::Sender<RequestResult>,
+    writer: JoinHandle<Result<RunAccumulator>>,
 }
 
 impl ResultSink {
     pub(super) fn create(path: &Path) -> Result<Self> {
-        let writer = BufWriter::new(
+        let mut file = BufWriter::new(
             File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
         );
-        Ok(Self {
-            writer,
-            accumulator: RunAccumulator::new()?,
-        })
+        let mut accumulator = RunAccumulator::new()?;
+        let (sender, receiver) = mpsc::channel::<RequestResult>();
+        let writer = std::thread::Builder::new()
+            .name("agent-loadgen-results".to_string())
+            .spawn(move || {
+                while let Ok(result) = receiver.recv() {
+                    let mut next = Some(result);
+                    while let Some(result) = next {
+                        accumulator.record(&result)?;
+                        serde_json::to_writer(&mut file, &result)
+                            .context("failed to write request result")?;
+                        file.write_all(b"\n")?;
+                        next = receiver.try_recv().ok();
+                    }
+                    file.flush()?;
+                }
+                file.flush()?;
+                Ok(accumulator)
+            })
+            .context("failed to start the result writer")?;
+        Ok(Self { sender, writer })
     }
 
-    pub(super) fn record(&mut self, result: RequestResult) -> Result<()> {
-        self.accumulator.record(&result)?;
-        serde_json::to_writer(&mut self.writer, &result)
-            .context("failed to write request result")?;
-        self.writer.write_all(b"\n")?;
-        self.writer.flush()?;
+    /// Queue one result without waiting for the file.
+    pub(super) fn record(&self, result: RequestResult) -> Result<()> {
+        if self.sender.send(result).is_err() {
+            bail!("the result writer stopped early; its error is reported when the run ends");
+        }
         Ok(())
+    }
+
+    /// Wait for every queued result to be written and return the run statistics.
+    pub(super) fn finish(self) -> Result<RunAccumulator> {
+        drop(self.sender);
+        self.writer
+            .join()
+            .map_err(|_| anyhow::anyhow!("the result writer panicked"))?
     }
 }
 
