@@ -44,7 +44,7 @@ A bundle job turns one dashboard session (optionally with its subagent tree) int
 
 1. Resolve sessions. `session_id` plus, when `include_tree` is true, every descendant found by walking `global.json` `trees[].kids`. IDs must match `^[A-Za-z0-9_.:-]{1,128}$`; a missing root session is a 404.
 2. Pick shard hours. Every `rows[].ts` of every included session maps to its UTC hour, widened by one hour on each side because shard hour keys lag request arrival. More than 12 hours is rejected (400) as too large for an interactive export.
-3. Map the harness. `claude-code`, `codex`, and `opencode` become the same `--headers` dialect; anything else becomes `opencode` with `agent_inferred: true`.
+3. Map the harness. `claude-code` and `codex` become the same `--headers` dialect; anything else becomes `codex` with `agent_inferred: true`.
 4. List shards. `request-trace/v1/env=prd/` is listed once for `cluster=` partitions, then every `cluster=<C>/model=<M>/date=<D>/hour=<H>/` prefix is listed (eight listings at a time). Only `.jsonl.gz` keys are kept.
 5. Scan. Up to eight shards per job stream concurrently. Each object is decompressed as multi-member gzip, split into lines, prefiltered with an Aho-Corasick automaton over the session IDs, and only hits are JSON-parsed. A line is kept when `agent_context.session_id` (from the record or its `event` envelope) is one of the sessions. `request_end` records with zero or missing `output_tokens` are dropped (`dropped_zero_output`); duplicates by `request.request_id` across overlapping listings are removed (`deduplicated`); `replay.trace_block_size` and `request.model` values are collected.
 6. Write `bundle.jsonl` in deterministic order (session, request time, request ID, bytes), fail if nothing matched or more than one block size was seen, then validate it in process exactly like `agent-loadgen inspect --token-start 1000 --allow-unverified-token-range`. The result is `inspect: {root_requests, dependency_edges, fidelity}` or `inspect: {error}`; a failed inspect still delivers the bundle.
@@ -81,7 +81,7 @@ Response:
   },
   "has_svg": false,
   "scenario_bytes": 0,
-  "command": "agent-loadgen generate --config scenario.toml \\\n  --headers dynamo ...",
+  "command": "agent-loadgen generate --config scenario.toml \\\n  --headers claude-code ...",
   "elapsed_ms": 0
 }
 ```

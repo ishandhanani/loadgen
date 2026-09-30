@@ -14,87 +14,9 @@ use super::{
     HttpTransport, PreparedMetadata, PreparedRequest, ReplayContext, ReplayOptions,
     RequestExecution, RequestResult, millis,
 };
+use crate::headers::is_managed_header;
 use crate::token_shape::TokenDictionary;
-use agent_loadgen_core::{AgentContext, HeaderDialect, TraceRequest};
-
-/// Render the per-request agent headers for one wire dialect.
-///
-/// Every dialect sends the generic Dynamo session lineage headers and marks the
-/// last request of a session with `x-dynamo-session-final`. Harness dialects
-/// add their own session, child, and compaction headers on top.
-fn dialect_headers(
-    dialect: HeaderDialect,
-    context: Option<&AgentContext>,
-    session_final: bool,
-) -> Vec<(&'static str, String)> {
-    let Some(context) = context else {
-        return Vec::new();
-    };
-    let mut headers = vec![("x-dynamo-session-id", context.session_id.clone())];
-    if let Some(parent) = &context.parent_session_id {
-        headers.push(("x-dynamo-parent-session-id", parent.clone()));
-    }
-    if session_final {
-        headers.push(("x-dynamo-session-final", "true".to_string()));
-    }
-    headers.extend(match dialect {
-        HeaderDialect::Dynamo => Vec::new(),
-        HeaderDialect::ClaudeCode => {
-            if let Some(parent) = &context.parent_session_id {
-                vec![
-                    ("x-claude-code-session-id", parent.clone()),
-                    ("x-claude-code-agent-id", context.session_id.clone()),
-                    ("x-claude-code-parent-agent-id", parent.clone()),
-                ]
-            } else {
-                vec![("x-claude-code-session-id", context.session_id.clone())]
-            }
-        }
-        HeaderDialect::Codex => {
-            let mut values = vec![("thread-id", context.session_id.clone())];
-            if let Some(parent) = &context.parent_session_id {
-                values.push(("x-codex-parent-thread-id", parent.clone()));
-            }
-            values
-        }
-        HeaderDialect::Opencode => {
-            let mut values = vec![("x-session-id", context.session_id.clone())];
-            if let Some(parent) = &context.parent_session_id {
-                values.push(("x-parent-session-id", parent.clone()));
-            }
-            values
-        }
-    });
-    // Dynamo only parses compaction metadata from the Codex header, so no other
-    // dialect labels compaction attempts on the wire.
-    if let (HeaderDialect::Codex, Some(compaction)) = (dialect, context.compaction.as_ref()) {
-        headers.push((
-            "x-codex-turn-metadata",
-            json!({"request_kind": "compaction", "compaction": compaction}).to_string(),
-        ));
-    }
-    headers
-}
-
-fn is_managed_header(name: &str) -> bool {
-    const MANAGED_HEADERS: &[&str] = &[
-        "x-request-id",
-        "x-dynamo-session-id",
-        "x-dynamo-parent-session-id",
-        "x-dynamo-session-final",
-        "x-claude-code-session-id",
-        "x-claude-code-agent-id",
-        "x-claude-code-parent-agent-id",
-        "thread-id",
-        "x-codex-parent-thread-id",
-        "x-codex-turn-metadata",
-        "x-session-id",
-        "x-parent-session-id",
-    ];
-    MANAGED_HEADERS
-        .iter()
-        .any(|header| name.eq_ignore_ascii_case(header))
-}
+use agent_loadgen_core::TraceRequest;
 
 pub(super) fn normalize_target(target: &str) -> String {
     let target = target.trim_end_matches('/');
@@ -141,12 +63,11 @@ pub(super) fn prepare_request(
     for (name, value) in &options.static_headers {
         builder = builder.header(name, value);
     }
-    for (name, value) in dialect_headers(
-        options.header_dialect,
-        request.agent_context.as_ref(),
-        execution.session_final,
-    ) {
+    for (name, value) in &execution.headers {
         builder = builder.header(name, value);
+    }
+    if execution.session_final && options.dynamo_session_final {
+        builder = builder.header("x-dynamo-session-final", "true");
     }
     let http_request = builder
         .build()
@@ -582,91 +503,4 @@ fn selected_response_headers(headers: &reqwest::header::HeaderMap) -> BTreeMap<S
             }
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn child_context() -> AgentContext {
-        AgentContext {
-            session_id: "child".to_string(),
-            parent_session_id: Some("parent".to_string()),
-            compaction: None,
-            input_trigger: None,
-        }
-    }
-
-    #[test]
-    fn header_dialects_preserve_child_identity() {
-        let context = child_context();
-        assert_eq!(
-            dialect_headers(HeaderDialect::Dynamo, Some(&context), false),
-            vec![
-                ("x-dynamo-session-id", "child".to_string()),
-                ("x-dynamo-parent-session-id", "parent".to_string()),
-            ]
-        );
-        assert_eq!(
-            dialect_headers(HeaderDialect::Codex, Some(&context), false),
-            vec![
-                ("x-dynamo-session-id", "child".to_string()),
-                ("x-dynamo-parent-session-id", "parent".to_string()),
-                ("thread-id", "child".to_string()),
-                ("x-codex-parent-thread-id", "parent".to_string()),
-            ]
-        );
-        assert_eq!(
-            dialect_headers(HeaderDialect::ClaudeCode, Some(&context), false),
-            vec![
-                ("x-dynamo-session-id", "child".to_string()),
-                ("x-dynamo-parent-session-id", "parent".to_string()),
-                ("x-claude-code-session-id", "parent".to_string()),
-                ("x-claude-code-agent-id", "child".to_string()),
-                ("x-claude-code-parent-agent-id", "parent".to_string()),
-            ]
-        );
-        assert_eq!(
-            dialect_headers(HeaderDialect::Opencode, Some(&context), false),
-            vec![
-                ("x-dynamo-session-id", "child".to_string()),
-                ("x-dynamo-parent-session-id", "parent".to_string()),
-                ("x-session-id", "child".to_string()),
-                ("x-parent-session-id", "parent".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn every_dialect_marks_the_final_session_request() {
-        let root = AgentContext {
-            session_id: "root".to_string(),
-            parent_session_id: None,
-            compaction: None,
-            input_trigger: None,
-        };
-        for dialect in [
-            HeaderDialect::Dynamo,
-            HeaderDialect::ClaudeCode,
-            HeaderDialect::Codex,
-            HeaderDialect::Opencode,
-        ] {
-            let headers = dialect_headers(dialect, Some(&root), true);
-            assert_eq!(headers[0], ("x-dynamo-session-id", "root".to_string()));
-            assert_eq!(headers[1], ("x-dynamo-session-final", "true".to_string()));
-            assert!(
-                dialect_headers(dialect, Some(&root), false)
-                    .iter()
-                    .all(|(name, _)| *name != "x-dynamo-session-final")
-            );
-        }
-        assert!(dialect_headers(HeaderDialect::Dynamo, None, true).is_empty());
-    }
-
-    #[test]
-    fn managed_header_names_are_case_insensitive() {
-        assert!(is_managed_header("X-Request-ID"));
-        assert!(is_managed_header("thread-id"));
-        assert!(!is_managed_header("authorization"));
-    }
 }

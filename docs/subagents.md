@@ -60,7 +60,7 @@ Non-blocking children can outlive the parent session. They can also overlap with
 
 ## Session lineage
 
-Each child receives a unique `session_id` and the parent `session_id` as `parent_session_id`. Every request carries this lineage as `x-dynamo-session-id` and `x-dynamo-parent-session-id`; the `--headers` dialect additionally renders it as Claude Code, Codex, or OpenCode headers. The child's last request carries `x-dynamo-session-final: true`, as does the parent's.
+Each child receives a unique `session_id` and the parent `session_id` as `parent_session_id`. The `--headers` dialect renders this lineage as Claude Code or Codex headers, and Dynamo maps them to its session and parent-session identity. With `--dynamo-session-final`, the child's last request carries `x-dynamo-session-final: true`, as does the parent's.
 
 `scenario.json` records every generated session with its depth, `top_level_session_index`, and `top_level_stream_slot`. Its `session_topology` separates the configured top-level session and stream counts from generated subagent protocol sessions. The spawning parent node records direct children in `spawned_session_ids`.
 

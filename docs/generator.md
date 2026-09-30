@@ -2,7 +2,7 @@
 
 Generator profiles are strict, versioned TOML. Unknown fields and unsupported schema versions fail during planning. `scenario.json` contains the fully resolved configuration, so a run does not depend on hidden defaults after planning.
 
-Schema version 5 defines traffic shape entirely in the profile. There is no `agent` field and no per-agent preset: every omitted field resolves to the single neutral default set in [Generator defaults](presets.md). The coding-agent harness is a run-time wire choice, `--headers {dynamo|claude-code|codex|opencode}` (default `dynamo`), and it never changes the plan or its digests.
+Schema version 5 defines traffic shape entirely in the profile. There is no `agent` field and no per-agent preset: every omitted field resolves to the single neutral default set in [Generator defaults](presets.md). The coding-agent harness is a run-time wire choice, `--headers {claude-code|codex}`, and it never changes the plan or its digests.
 
 Schema 4 profiles are rejected with a migration message: delete the `agent` line, set `schema_version = 5`, and pass `--headers` if a harness dialect is wanted. The five values the old presets varied (`tokens.system_prefix_tokens`, `tokens.tool_catalog_tokens`, `behavior.tool_probability`, `behavior.parallel_tool_probability`, `behavior.subagent_probability`) can be written into the profile explicitly to reproduce an old preset. Schema 3 names (`root_sessions`, `concurrent_agents`) remain rejected; there are no compatibility aliases.
 

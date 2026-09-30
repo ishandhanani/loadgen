@@ -11,7 +11,7 @@ pub(super) use super::distribution::UIntDistribution;
 
 pub const GENERATOR_SCHEMA_VERSION: u32 = 5;
 
-const AGENT_FIELD_REMOVED: &str = "schema 5 removed the `agent` field (shape is now fully defined by this file). Delete the `agent` line, set `schema_version = 5`, and choose the header dialect at run time with `--headers {dynamo|claude-code|codex|opencode}` (default dynamo).";
+const AGENT_FIELD_REMOVED: &str = "schema 5 removed the `agent` field (shape is now fully defined by this file). Delete the `agent` line, set `schema_version = 5`, and choose the header dialect at run time with `--headers {claude-code|codex}`.";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -647,7 +647,7 @@ mod tests {
         assert!(error.starts_with("generator schema 4 is no longer supported"));
         assert!(error.contains("removed the `agent` field"));
         assert!(error.contains("schema_version = 5"));
-        assert!(error.contains("--headers {dynamo|claude-code|codex|opencode}"));
+        assert!(error.contains("--headers {claude-code|codex}"));
     }
 
     #[test]

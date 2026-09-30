@@ -18,6 +18,7 @@ mod captured;
 mod causal;
 mod clock;
 mod generated;
+mod headers;
 mod request;
 
 pub mod telemetry;
@@ -44,6 +45,8 @@ pub enum HttpTransport {
 #[derive(Debug, Clone)]
 pub struct ReplayOptions {
     pub header_dialect: HeaderDialect,
+    /// Add `x-dynamo-session-final: true` to each session's last request.
+    pub dynamo_session_final: bool,
     pub model: String,
     pub target: String,
     pub output_dir: PathBuf,
@@ -95,6 +98,7 @@ pub(crate) struct RequestResult {
 pub struct RunSummary {
     pub run_id: String,
     pub header_dialect: HeaderDialect,
+    pub dynamo_session_final: bool,
     pub model: String,
     pub target: String,
     pub time_scale: f64,
@@ -177,9 +181,11 @@ struct PreparedMetadata {
 }
 
 struct RequestExecution {
+    /// Harness headers rendered for this request.
+    headers: headers::Headers,
     output_budget_tokens: Option<u32>,
     compaction_attempt: Option<GeneratedCompactionAttempt>,
-    /// Last request of its protocol session; sent as `x-dynamo-session-final`.
+    /// Last request of its protocol session; see `ReplayOptions::dynamo_session_final`.
     session_final: bool,
 }
 

@@ -125,6 +125,7 @@ async fn replay_sends_shape_and_agent_headers() {
             session_id: "thread-1".to_string(),
             parent_session_id: None,
             compaction: Some(serde_json::json!({"phase": "mid_turn"})),
+            agent_headers: Default::default(),
             input_trigger: Some("tool_result".to_string()),
         }),
     };
@@ -163,6 +164,7 @@ async fn replay_sends_shape_and_agent_headers() {
         dictionary,
         ReplayOptions {
             header_dialect: HeaderDialect::Codex,
+            dynamo_session_final: true,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -189,22 +191,24 @@ async fn replay_sends_shape_and_agent_headers() {
     assert!(summary.total_time_ms >= 5.0);
     let (headers, body) = capture.0.lock().unwrap().clone().unwrap();
     assert_eq!(headers.get("thread-id").unwrap(), "thread-1");
-    assert_eq!(headers.get("x-dynamo-session-id").unwrap(), "thread-1");
+    assert!(headers.get("x-dynamo-session-id").is_none());
     assert_eq!(headers.get("x-dynamo-session-final").unwrap(), "true");
+    assert_eq!(headers.get("session-id").unwrap(), "thread-1");
+    assert_eq!(headers.get("x-codex-window-id").unwrap(), "thread-1:0");
+    let metadata = serde_json::from_str::<serde_json::Value>(
+        headers
+            .get("x-codex-turn-metadata")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(metadata["request_kind"], "compaction");
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(
-            headers
-                .get("x-codex-turn-metadata")
-                .unwrap()
-                .to_str()
-                .unwrap(),
-        )
-        .unwrap(),
-        serde_json::json!({
-            "request_kind": "compaction",
-            "compaction": {"phase": "mid_turn"}
-        })
+        metadata["compaction"],
+        serde_json::json!({"phase": "mid_turn"})
     );
+    assert_eq!(metadata["thread_id"], "thread-1");
     assert_eq!(body["max_tokens"], 2);
     assert!(body.get("min_tokens").is_none());
     assert_eq!(body["ignore_eos"], true);
@@ -245,6 +249,7 @@ async fn recorded_scheduler_handles_tied_millisecond_arrivals() {
                 session_id: format!("thread-{ordinal}"),
                 parent_session_id: None,
                 compaction: None,
+                agent_headers: Default::default(),
                 input_trigger: Some("user_message".to_string()),
             }),
         })
@@ -289,6 +294,7 @@ async fn recorded_scheduler_handles_tied_millisecond_arrivals() {
         dictionary,
         ReplayOptions {
             header_dialect: HeaderDialect::Codex,
+            dynamo_session_final: true,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -341,6 +347,7 @@ async fn captured_successor_waits_for_actual_completion_plus_recorded_gap() {
                 session_id: "thread".to_string(),
                 parent_session_id: None,
                 compaction: None,
+                agent_headers: Default::default(),
                 input_trigger: Some(if ordinal == 0 {
                     "user_message".to_string()
                 } else {
@@ -395,6 +402,7 @@ async fn captured_successor_waits_for_actual_completion_plus_recorded_gap() {
         dictionary,
         ReplayOptions {
             header_dialect: HeaderDialect::Codex,
+            dynamo_session_final: true,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -483,6 +491,7 @@ async fn generated_graph_releases_tool_successor_after_completion() {
         dictionary,
         ReplayOptions {
             header_dialect: HeaderDialect::Codex,
+            dynamo_session_final: true,
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
@@ -515,7 +524,7 @@ async fn generated_graph_releases_tool_successor_after_completion() {
     let (headers, _) = capture.0.lock().unwrap().clone().unwrap();
     assert_eq!(headers.get("x-dynamo-session-final").unwrap(), "true");
     assert_eq!(
-        headers.get("x-dynamo-session-id").unwrap(),
+        headers.get("thread-id").unwrap(),
         scenario.sessions[0].session_id.as_str()
     );
     server.abort();
@@ -526,4 +535,148 @@ fn scaled_offsets_use_integer_nanoseconds() {
     assert_eq!(scaled_offset_ns(1, 1.0).unwrap(), 1_000_000);
     assert_eq!(scaled_offset_ns(1, 2.0).unwrap(), 500_000);
     assert_eq!(scaled_offset_ns(1, 3.0).unwrap(), 333_333);
+}
+
+#[derive(Clone, Default)]
+struct HeaderCapture(Arc<Mutex<Vec<HeaderMap>>>);
+
+async fn header_endpoint(
+    State(capture): State<HeaderCapture>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    capture.0.lock().unwrap().push(headers);
+    Response::builder()
+        .header("content-type", "text/event-stream")
+        .body(Body::from(
+            "data: {\"choices\":[],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n",
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn generated_claude_headers_reach_the_wire() {
+    let capture = HeaderCapture::default();
+    let app = Router::new()
+        .route("/v1/chat/completions", post(header_endpoint))
+        .with_state(capture.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let config = GeneratorConfig::parse(
+        r#"
+            schema_version = 5
+            seed = 9
+            [load]
+            num_sessions = 1
+            concurrent_sessions = 1
+            [trajectory]
+            turns = { kind = "fixed", value = 3 }
+            output_tokens = { kind = "fixed", value = 2 }
+            [behavior]
+            tool_probability = 0.0
+            parallel_tool_probability = 1.0
+            subagent_probability = 0.0
+            swarm_probability = 0.0
+            completion_probability = 0.0
+            [tools]
+            parallel_count = { kind = "fixed", value = 2 }
+            classes = [{ name = "shell", weight = 1.0, latency_ms = { kind = "fixed", value = 17 }, result_tokens = { kind = "fixed", value = 16 } }]
+            [compaction]
+            enabled = false
+        "#,
+    )
+    .unwrap();
+    let scenario = GeneratedScenario::generate(config.resolve().unwrap()).unwrap();
+    let dictionary = TokenDictionary::new(
+        scenario.trace_manifest.trace_block_size,
+        scenario.trace_manifest.distinct_sequence_hashes,
+        SafeTokenAlphabet::from_unverified_range(100, 1024, &[]).unwrap(),
+    )
+    .unwrap();
+    let output = tempdir().unwrap();
+    let summary = run_generated_scenario(
+        &scenario,
+        dictionary,
+        ReplayOptions {
+            header_dialect: HeaderDialect::ClaudeCode,
+            dynamo_session_final: false,
+            model: "test-model".to_string(),
+            target,
+            output_dir: output.path().to_path_buf(),
+            max_in_flight: 2,
+            warmup_connections: 0,
+            http_transport: HttpTransport::Auto,
+            result_flush_interval: 1,
+            max_dispatch_p99_ms: 1000.0,
+            max_dispatch_max_ms: 1000.0,
+            start_delay: Duration::ZERO,
+            timeout: Duration::from_secs(5),
+            time_scale: 100.0,
+            token_path_verified: false,
+            engine_cache_mode: BTreeMap::new(),
+            static_headers: Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(summary.succeeded, 3);
+    let headers = capture.0.lock().unwrap();
+    let session = scenario.sessions[0].session_id.as_str();
+    let prompt = headers[0]["x-claude-code-prompt-id"].clone();
+    for (index, headers) in headers.iter().enumerate() {
+        assert_eq!(headers["x-claude-code-session-id"], session);
+        assert_eq!(headers["x-claude-code-request-class"], "main");
+        assert_eq!(headers["x-claude-code-prompt-id"], prompt);
+        assert!(!headers.contains_key("x-claude-code-agent-id"));
+        assert!(
+            headers
+                .keys()
+                .all(|name| !name.as_str().starts_with("x-dynamo-"))
+        );
+        assert_eq!(
+            headers
+                .get("x-claude-code-prev-tool-durations")
+                .map(|value| value.to_str().unwrap()),
+            (index > 0).then_some("Bash=17;Bash=17")
+        );
+    }
+    server.abort();
+}
+
+#[test]
+fn harness_headers_cannot_be_overridden_with_static_headers() {
+    let mut options = ReplayOptions {
+        header_dialect: HeaderDialect::ClaudeCode,
+        dynamo_session_final: false,
+        model: "test-model".to_string(),
+        target: "http://localhost:8000".to_string(),
+        output_dir: std::path::PathBuf::from("unused"),
+        max_in_flight: 1,
+        warmup_connections: 0,
+        http_transport: HttpTransport::Auto,
+        result_flush_interval: 1,
+        max_dispatch_p99_ms: 1.0,
+        max_dispatch_max_ms: 1.0,
+        start_delay: Duration::ZERO,
+        timeout: Duration::from_secs(1),
+        time_scale: 1.0,
+        token_path_verified: false,
+        engine_cache_mode: BTreeMap::new(),
+        static_headers: Vec::new(),
+    };
+    for name in [
+        "X-Claude-Code-Request-Class",
+        "Session-Id",
+        "x-codex-window-id",
+    ] {
+        options.static_headers = vec![(name.to_string(), "override".to_string())];
+        assert!(
+            super::request::validate_options(&options)
+                .unwrap_err()
+                .to_string()
+                .contains("owned by agent-loadgen")
+        );
+    }
+    options.static_headers = vec![("anthropic-beta".to_string(), "future".to_string())];
+    super::request::validate_options(&options).unwrap();
 }

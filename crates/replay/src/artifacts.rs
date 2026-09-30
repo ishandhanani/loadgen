@@ -203,6 +203,7 @@ pub(super) fn summarize(
     RunSummary {
         run_id: identity.run_id,
         header_dialect: options.header_dialect,
+        dynamo_session_final: options.dynamo_session_final,
         model: options.model.clone(),
         target: identity.target.to_string(),
         time_scale: options.time_scale,

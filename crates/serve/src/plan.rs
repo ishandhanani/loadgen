@@ -27,7 +27,7 @@ pub const SVG_NODE_LIMIT: usize = 500;
 /// regenerated on the first `GET`.
 pub const SCENARIO_STORE_LIMIT: usize = 64 * 1024 * 1024;
 
-pub const GENERATE_COMMAND: &str = "agent-loadgen generate --config scenario.toml \\\n  --headers dynamo --model <served-model-name> \\\n  --target http://<your-dynamo-frontend>:8000 \\\n  --tokenizer <hf-model-id-or-local-dir> \\\n  --output ./generate-run";
+pub const GENERATE_COMMAND: &str = "agent-loadgen generate --config scenario.toml \\\n  --headers claude-code --model <served-model-name> \\\n  --target http://<your-dynamo-frontend>:8000 \\\n  --tokenizer <hf-model-id-or-local-dir> \\\n  --output ./generate-run";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanResponse {

@@ -13,7 +13,9 @@ use super::request::{
     build_http_client, normalize_target, prepare_open_file_limit, prepare_request, validate_options,
 };
 use super::{PreparedRequest, ReplayOptions, RequestExecution, RunSummary, TrafficKind};
+use crate::headers::{HeaderInput, Headers, render};
 use crate::token_shape::TokenDictionary;
+use agent_loadgen_core::HeaderDialect;
 use agent_loadgen_trace::AgenticTrace;
 
 pub async fn run_agentic_replay(
@@ -22,6 +24,7 @@ pub async fn run_agentic_replay(
     options: ReplayOptions,
 ) -> Result<RunSummary> {
     validate_options(&options)?;
+    let headers = captured_headers(&trace, options.header_dialect)?;
     prepare_open_file_limit(options.max_in_flight)?;
     fs::create_dir_all(&options.output_dir).with_context(|| {
         format!(
@@ -40,6 +43,7 @@ pub async fn run_agentic_replay(
         request_factory: CapturedRequestFactory {
             trace: &trace,
             session_finals,
+            headers,
             dictionary: &dictionary,
             client: client.clone(),
             target: target.clone(),
@@ -94,6 +98,29 @@ impl CausalWorkload for CapturedWorkload<'_> {
     }
 }
 
+/// Render harness headers for every turn before dispatch.
+///
+/// Captured tool events carry profile-free classes without result collection
+/// order, so only recorded Claude Code headers supply previous tool durations.
+fn captured_headers(trace: &AgenticTrace, dialect: HeaderDialect) -> Result<Vec<Headers>> {
+    let requests = trace
+        .turns
+        .iter()
+        .map(|turn| {
+            Ok(HeaderInput {
+                context: turn
+                    .request
+                    .agent_context
+                    .as_ref()
+                    .context("captured replay requires agent_context")?,
+                dependencies: &turn.dependencies,
+                launched_tools: Vec::new(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    render(dialect, &requests)
+}
+
 /// Flag the last request of each captured session by ordinal.
 ///
 /// Turn index equals request ordinal, and ordinals follow recorded arrival, so
@@ -115,6 +142,7 @@ fn session_final_flags(trace: &AgenticTrace) -> Vec<bool> {
 struct CapturedRequestFactory<'a> {
     trace: &'a AgenticTrace,
     session_finals: Vec<bool>,
+    headers: Vec<Headers>,
     dictionary: &'a TokenDictionary,
     client: reqwest::Client,
     target: String,
@@ -137,6 +165,7 @@ impl CapturedRequestFactory<'_> {
             self.dictionary,
             turn.request.clone(),
             RequestExecution {
+                headers: self.headers[ordinal].clone(),
                 output_budget_tokens: Some(turn.request.output_tokens),
                 compaction_attempt: None,
                 session_final: self.session_finals[ordinal],

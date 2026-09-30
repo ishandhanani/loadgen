@@ -3,7 +3,7 @@
 # Neutral balanced profile: every omitted field resolves to the built-in
 # default documented in docs/presets.md. Traffic shape comes only from this
 # file; select the wire header dialect at run time with
-# `--headers {dynamo|claude-code|codex|opencode}` (default dynamo).
+# `--headers {claude-code|codex}`.
 #
 # Override sections and their knobs:
 #   [load]        num_sessions, concurrent_sessions, startup_interval_ms, restart_delay_ms

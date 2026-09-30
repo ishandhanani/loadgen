@@ -112,9 +112,14 @@ pub enum Command {
         #[arg(required = true)]
         trace: Vec<PathBuf>,
 
-        /// Request header dialect: generic Dynamo headers only, or a coding-agent harness mapping on top.
-        #[arg(long = "headers", value_enum, default_value_t = HeaderDialect::Dynamo)]
+        /// Coding-agent harness whose request headers to send.
+        #[arg(long = "headers", value_enum)]
         header_dialect: HeaderDialect,
+
+        /// Also mark each session's last request with `x-dynamo-session-final: true`.
+        /// No harness sends this Dynamo extension; enable it only for deployments that consume it.
+        #[arg(long)]
+        dynamo_session_final: bool,
 
         /// Model name sent to Dynamo.
         #[arg(long)]
@@ -195,9 +200,14 @@ pub enum Command {
         #[arg(long)]
         config: PathBuf,
 
-        /// Request header dialect: generic Dynamo headers only, or a coding-agent harness mapping on top.
-        #[arg(long = "headers", value_enum, default_value_t = HeaderDialect::Dynamo)]
+        /// Coding-agent harness whose request headers to send.
+        #[arg(long = "headers", value_enum)]
         header_dialect: HeaderDialect,
+
+        /// Also mark each session's last request with `x-dynamo-session-final: true`.
+        /// No harness sends this Dynamo extension; enable it only for deployments that consume it.
+        #[arg(long)]
+        dynamo_session_final: bool,
 
         /// Model name sent to Dynamo.
         #[arg(long)]

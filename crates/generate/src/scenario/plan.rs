@@ -534,6 +534,10 @@ impl Planner {
                 abort_after_ms,
             };
             let compaction = serde_json::json!({
+                "trigger": "auto",
+                "reason": "context_limit",
+                "implementation": "responses",
+                "strategy": "memento",
                 "operation_id": operation_id.clone(),
                 "phase": phase,
                 "attempt": attempt,
@@ -659,6 +663,7 @@ impl Planner {
                 parent_session_id: state.parent_session_id.clone(),
                 compaction: spec.compaction,
                 input_trigger: Some(spec.input_trigger.to_string()),
+                agent_headers: Default::default(),
             }),
         };
         self.nodes.push(GeneratedNode {

@@ -46,15 +46,14 @@ fn default_true() -> bool {
     true
 }
 
-/// Dashboard harness label -> `--headers` dialect. Unknown labels fall back to
-/// `opencode`, the catch-all bucket the dashboard builder uses, and the job
-/// reports `agent_inferred: true`.
+/// Dashboard harness label -> `--headers` dialect. Other harnesses fall back to
+/// `codex`, whose flat thread and parent-thread headers carry any session tree,
+/// and the job reports `agent_inferred: true`.
 pub fn agent_for_harness(harness: &str) -> (&'static str, bool) {
     match harness {
         "claude-code" => ("claude-code", false),
         "codex" => ("codex", false),
-        "opencode" => ("opencode", false),
-        _ => ("opencode", true),
+        _ => ("codex", true),
     }
 }
 
@@ -904,6 +903,7 @@ mod tests {
     fn harness_mapping() {
         assert_eq!(agent_for_harness("claude-code"), ("claude-code", false));
         assert_eq!(agent_for_harness("codex"), ("codex", false));
-        assert_eq!(agent_for_harness("unknown"), ("opencode", true));
+        assert_eq!(agent_for_harness("opencode"), ("codex", true));
+        assert_eq!(agent_for_harness("unknown"), ("codex", true));
     }
 }

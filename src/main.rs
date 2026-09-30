@@ -46,6 +46,7 @@ async fn main() -> Result<()> {
         Command::Replay {
             trace,
             header_dialect,
+            dynamo_session_final,
             model,
             target,
             output,
@@ -78,6 +79,7 @@ async fn main() -> Result<()> {
                 dictionary,
                 ReplayOptions {
                     header_dialect,
+                    dynamo_session_final,
                     model,
                     target,
                     output_dir: output,
@@ -133,6 +135,7 @@ async fn main() -> Result<()> {
         Command::Generate {
             config,
             header_dialect,
+            dynamo_session_final,
             model,
             target,
             output,
@@ -160,6 +163,7 @@ async fn main() -> Result<()> {
                 dictionary,
                 ReplayOptions {
                     header_dialect,
+                    dynamo_session_final,
                     model,
                     target,
                     output_dir: output,

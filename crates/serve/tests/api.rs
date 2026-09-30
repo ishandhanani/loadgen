@@ -244,7 +244,7 @@ async fn health_plan_and_replay_bundle_flow() {
     assert_eq!(
         plan["command"],
         json!(
-            "agent-loadgen generate --config scenario.toml \\\n  --headers dynamo --model <served-model-name> \\\n  --target http://<your-dynamo-frontend>:8000 \\\n  --tokenizer <hf-model-id-or-local-dir> \\\n  --output ./generate-run"
+            "agent-loadgen generate --config scenario.toml \\\n  --headers claude-code --model <served-model-name> \\\n  --target http://<your-dynamo-frontend>:8000 \\\n  --tokenizer <hf-model-id-or-local-dir> \\\n  --output ./generate-run"
         )
     );
     let first_node = &plan["timeline"]["nodes"][0];

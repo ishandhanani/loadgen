@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -11,6 +13,9 @@ pub struct AgentContext {
     pub compaction: Option<serde_json::Value>,
     #[serde(default)]
     pub input_trigger: Option<String>,
+    /// Coding-agent headers Dynamo recorded verbatim from the original request.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_headers: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
