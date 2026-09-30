@@ -1,0 +1,63 @@
+# agent-loadgen against one MiniMax-M3 NVFP4 replica (SGLang TP4) behind a
+# Dynamo frontend with the KV router. The benchmark step runs /loadgen/run.sh,
+# which reads /loadgen/runs.txt. Dynamo is built from main 8c226c99bb so
+# request traces record the coding-agent headers (ai-dynamo/dynamo#15367).
+schema: 2
+name: "minimax-m3-agent-loadgen"
+
+slurm:
+  time_limit: "04:00:00"
+
+model:
+  path: "/data/models/MiniMax-M3-NVFP4"
+  container: "/path/to/sglang-nightly-dev-cu13-20260930-cae69be5.sqsh"
+  precision: "nvfp4"
+
+resources:
+  gpu_type: "b200"
+  gpus_per_node: 8
+
+dynamo:
+  source:
+    git: https://github.com/ai-dynamo/dynamo
+    rev: 8c226c99bbe4397c73354613eebd071835da5bd8
+
+frontend:
+  type: dynamo
+  enable_multiple_frontends: false
+  args:
+    router-mode: "kv"
+    router-kv-events: true
+    kv-cache-block-size: 64
+  env:
+    DYN_REQUEST_TRACE: "1"
+    DYN_REQUEST_TRACE_SINKS: "file"
+    DYN_REQUEST_TRACE_FILE_PATH: "/logs/request-trace"
+
+engine: sglang
+roles:
+  agg:
+    nodes: 1
+    workers: 1
+    gpus: 4
+    kv_events: true
+    env:
+      PYTHONUNBUFFERED: "1"
+    args:
+      served-model-name: "MiniMaxAI/MiniMax-M3-NVFP4"
+      tensor-parallel-size: 4
+      mem-fraction-static: 0.85
+      context-length: 262144
+      page-size: 64
+      trust-remote-code: true
+      # minimax_m3 breaks the piecewise torch.compile prefill graph in this build (job 17906).
+      cuda-graph-backend-prefill: disabled
+
+benchmark:
+  type: custom
+  command: "bash /loadgen/run.sh /loadgen/runs.txt"
+  env:
+    LOADGEN_MODEL: "MiniMaxAI/MiniMax-M3-NVFP4"
+
+extra_mount:
+  - "/path/to/session:/loadgen"
