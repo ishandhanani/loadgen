@@ -176,7 +176,7 @@ See [Subagents and swarms](subagents.md) for graph shape, joins, KV sharing, rec
 - `limits.max_sessions`: maximum protocol sessions, including descendants, in one tree and in a joined plan.
 - `limits.max_total_input_tokens`: maximum summed input length of a tree and of a joined plan.
 
-A tree that reaches a limit is cut short. A plan too large to join still runs with `generate`, which plans trees one at a time; `plan` then writes only `plan-summary.json`. These limits bound planner memory; they do not cap live HTTP concurrency, which is controlled by `--max-in-flight`.
+A tree that reaches a limit is cut short. A plan too large to join still runs with `generate`, which plans trees one at a time; `plan` then writes only `plan-summary.json`. These limits bound planner memory; they do not cap live HTTP concurrency, which comes from the load model and the target's latency.
 
 ## Reproducibility
 
@@ -293,4 +293,4 @@ Tool class inclusion materially changes time-weighted parallelism. Fit weights a
 | `limits.max_sessions` | `1000` | Bounds roots plus recursively generated child sessions. |
 | `limits.max_total_input_tokens` | `250000000` | Bounds aggregate plan size before HTTP payload construction. |
 
-These are planner memory guards. Runtime HTTP concurrency is separately bounded by `generate --max-in-flight`.
+These are planner memory guards. They do not bound live HTTP concurrency.

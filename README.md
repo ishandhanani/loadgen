@@ -61,7 +61,6 @@ target/release/agent-loadgen generate \
   --target http://127.0.0.1:8000 \
   --tokenizer /models/GLM-4.7-Flash \
   --output artifacts/diurnal-run \
-  --max-in-flight 4096 \
   --stop-after-minutes 120
 ```
 

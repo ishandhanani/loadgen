@@ -79,7 +79,7 @@ The repository token count is sampled when each session is planned. Therefore, t
 
 `load.concurrent_sessions` limits top-level session streams. It does not limit child sessions. A stream can have one active top-level tree while several descendants also run.
 
-The runtime limit `--max-in-flight` caps live HTTP requests across top-level sessions and children. Blocking and non-blocking graphs can both reach this cap.
+Live HTTP requests across top-level sessions and children are not capped by the profile; `run.json` reports the peak as `peak_in_flight`.
 
 ## Profile controls
 

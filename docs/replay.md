@@ -49,7 +49,7 @@ dependent ready time = latest actual replay dependency completion
 
 This preserves external session arrivals without allowing a tool continuation or subagent join to run before its prerequisite response completes. A slower target shifts dependent traffic and lowers achieved request rate naturally.
 
-`--time-scale` divides both root offsets and dependency delays. `--max-in-flight` is a client concurrency bound; ready requests wait for a slot and report that wait as `local_admission_lag_ms`.
+`--time-scale` divides both root offsets and dependency delays. The trace decides concurrency. The client limits requests in flight only to protect itself: `in_flight_limit` in `run.json` comes from the open-file limit, and a request that has to wait for a slot reports the wait as `local_admission_lag_ms`. If `peak_in_flight` equals `in_flight_limit`, the client held requests back; raise the open-file limit (`ulimit -n`) and rerun.
 
 `run.json` reports `dispatch_lag_ms`, the delay between a request becoming ready and the HTTP client receiving it. It does not include frontend queueing or model service time.
 

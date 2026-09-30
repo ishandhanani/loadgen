@@ -318,6 +318,8 @@ pub(super) struct SummaryIdentity<'a> {
     pub(super) run_id: String,
     pub(super) target: &'a str,
     pub(super) http_version: &'static str,
+    pub(super) in_flight_limit: usize,
+    pub(super) peak_in_flight: usize,
 }
 
 pub(super) fn summarize(
@@ -345,7 +347,8 @@ pub(super) fn summarize(
         model: options.model.clone(),
         target: identity.target.to_string(),
         time_scale: options.time_scale,
-        max_in_flight: options.max_in_flight,
+        in_flight_limit: identity.in_flight_limit,
+        peak_in_flight: identity.peak_in_flight,
         http_version: identity.http_version,
         timer_backend: TIMER_BACKEND,
         static_header_names: options

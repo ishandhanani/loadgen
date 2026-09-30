@@ -49,18 +49,18 @@ If the build fails with `could not execute process 'sccache ...'`, prefix it wit
    target/release/agent-loadgen generate --config acme-claude.toml \
      --headers claude-code --model <served-model-name> \
      --target http://<frontend>:8000 --tokenizer <hf-model-id-or-local-dir> \
-     --output runs/acme-claude --max-in-flight 4096 --stop-after-minutes 120
+     --output runs/acme-claude --stop-after-minutes 120
    ```
 
    - `--headers claude-code` or `--headers codex` (required) chooses which harness the requests look like. Use `codex` for API traffic; see the limits below.
    - `--tokenizer` must be the served model's tokenizer.
    - `--target` is a base URL or a full `/v1/chat/completions` URL, `http` or `https`. Send credentials with `--header Authorization="Bearer <token>"`.
    - `--stop-after-minutes` stops sending at a deadline and lets in-flight requests finish. Arrival sessions keep running after their schedule ends, so set it for time-boxed runs.
-   - `--max-in-flight` (default 256) caps concurrent HTTP requests locally. Raise it for fleets; if it binds, requests wait and `local_admission_lag_ms` grows.
+   - Concurrency comes from the profile and the target's latency; there is no concurrency flag. The client only guards its own file descriptors: if `run.json` shows `peak_in_flight` equal to `in_flight_limit`, raise `ulimit -n` and rerun.
    - For a mix, start one `generate` per profile at the same time, each with its own `--output`.
    - On a SLURM cluster, run it as an srt-slurm custom benchmark: `examples/srt-slurm/` has a recipe and scripts.
 6. **Read the results** in the output directory:
-   - `run.json`: `passed` (every sent request succeeded with its planned output length; the command exits non-zero otherwise), `failed`, `stopped_early`, `http_version`, and `performance` (requests and tokens per second; TTFT, request latency, and time-per-output-token percentiles).
+   - `run.json`: `passed` (every sent request succeeded with its planned output length; the command exits non-zero otherwise), `failed`, `stopped_early`, `http_version`, `peak_in_flight` (the most requests in flight at once; under arrivals, the concurrency the load produced), and `performance` (requests and tokens per second; TTFT, request latency, and time-per-output-token percentiles).
    - `timeline.csv`: one row per minute with requests, failures, root sessions started, request and token rates, and TTFT and latency percentiles. Compare it with the plan's arrival buckets.
    - `requests.jsonl`: one row per request. `replay_request_id` is the request's `x-request-id`, which joins it with Dynamo request traces and engine logs.
 

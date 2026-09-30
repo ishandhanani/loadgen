@@ -106,10 +106,6 @@ pub enum Command {
         #[command(flatten)]
         tokens: TokenArgs,
 
-        /// Maximum simultaneous HTTP requests.
-        #[arg(long, default_value_t = 4096)]
-        max_in_flight: usize,
-
         /// Per-request HTTP timeout.
         #[arg(long, default_value_t = 600)]
         timeout_seconds: u64,
@@ -168,10 +164,6 @@ pub enum Command {
 
         #[command(flatten)]
         tokens: TokenArgs,
-
-        /// Maximum simultaneous HTTP requests.
-        #[arg(long, default_value_t = 256)]
-        max_in_flight: usize,
 
         /// Per-request HTTP timeout.
         #[arg(long, default_value_t = 600)]

@@ -52,7 +52,7 @@ dependents: completion + recorded gap
 
 The trace loader validates all selected records before traffic starts. It rejects missing agent context, missing replay hashes, mixed block sizes, duplicate request IDs, zero-token input/output records, and cyclic dependencies.
 
-Each session is sequential. Parent/child context adds subagent launch and join edges. Exact Claude tool metadata wins when present; otherwise Dynamo's timestamp association rules infer the parent request around the child lifetime. Ready requests wait for the local concurrency bound instead of being dropped.
+Each session is sequential. Parent/child context adds subagent launch and join edges. Exact Claude tool metadata wins when present; otherwise Dynamo's timestamp association rules infer the parent request around the child lifetime. Ready requests are never dropped; if the client runs short of file descriptors, they wait for a free slot.
 
 See [Trace replay](replay.md) for the exact trace and timing contract.
 
@@ -141,7 +141,7 @@ See [Compaction](compaction.md) for trigger logic, attempt semantics, retained c
 
 - `scheduled_offset_ms`: intended causal release time.
 - `scheduler_wake_lag_ms`: timer wakeup error.
-- `local_admission_lag_ms`: time waiting for local concurrency.
+- `local_admission_lag_ms`: time waiting for a free slot under the client's open-file guard; zero unless `peak_in_flight` reached `in_flight_limit`.
 - `dispatch_lag_ms`: time from intended release until the HTTP client receives the request.
 - `ttft_ms`: time from dispatch to first output.
 - `total_time_ms`: time from dispatch to stream completion.

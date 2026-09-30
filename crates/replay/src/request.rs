@@ -105,12 +105,13 @@ pub(super) fn scaled_offset_ns(offset_ms: u64, time_scale: f64) -> Result<u64> {
 pub(super) async fn connect(
     options: &ReplayOptions,
     target: &str,
+    in_flight_limit: usize,
 ) -> Result<(reqwest::Client, &'static str)> {
     let builder = || {
         reqwest::Client::builder()
             .connect_timeout(options.timeout.min(Duration::from_secs(30)))
             .timeout(options.timeout)
-            .pool_max_idle_per_host(options.max_in_flight)
+            .pool_max_idle_per_host(in_flight_limit)
     };
     if target.starts_with("http://") {
         let client = builder()
@@ -163,9 +164,6 @@ pub(super) fn validate_options(options: &ReplayOptions) -> Result<()> {
     if options.model.trim().is_empty() {
         bail!("model must not be empty");
     }
-    if options.max_in_flight == 0 {
-        bail!("max_in_flight must be greater than zero");
-    }
     if !options.time_scale.is_finite() || options.time_scale <= 0.0 {
         bail!("time_scale must be a positive finite number");
     }
@@ -181,15 +179,17 @@ pub(super) fn validate_options(options: &ReplayOptions) -> Result<()> {
     Ok(())
 }
 
+/// How many requests the client may have in flight at once.
+///
+/// The profile or trace decides concurrency; this only keeps the machine
+/// running the load from exhausting file descriptors, since an HTTP/1.1
+/// request holds its own connection. The soft open-file limit is raised to the
+/// hard limit, and some descriptors stay reserved for everything else.
 #[cfg(unix)]
-pub(super) fn prepare_open_file_limit(max_in_flight: usize) -> Result<()> {
-    const RESERVED_FILE_DESCRIPTORS: usize = 64;
+pub(super) fn in_flight_limit() -> Result<usize> {
+    const RESERVED_FILE_DESCRIPTORS: libc::rlim_t = 256;
+    const MAX_FILE_DESCRIPTORS: libc::rlim_t = 1 << 20;
 
-    let desired = max_in_flight
-        .checked_add(RESERVED_FILE_DESCRIPTORS)
-        .context("the requested open-file limit overflows usize")?;
-    let desired = libc::rlim_t::try_from(desired)
-        .context("the requested open-file limit does not fit rlim_t")?;
     let mut limit = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -197,26 +197,26 @@ pub(super) fn prepare_open_file_limit(max_in_flight: usize) -> Result<()> {
     if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
         return Err(std::io::Error::last_os_error()).context("failed to read RLIMIT_NOFILE");
     }
-    if limit.rlim_cur >= desired {
-        return Ok(());
+    let wanted = limit.rlim_max.min(MAX_FILE_DESCRIPTORS);
+    if limit.rlim_cur < wanted {
+        let raised = libc::rlimit {
+            rlim_cur: wanted,
+            rlim_max: limit.rlim_max,
+        };
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } == 0 {
+            limit.rlim_cur = wanted;
+        }
     }
-    if limit.rlim_max < desired {
-        bail!(
-            "max_in_flight requires at least {desired} open files, but RLIMIT_NOFILE hard limit is {}",
-            limit.rlim_max
-        );
-    }
-    limit.rlim_cur = desired;
-    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } != 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("failed to raise RLIMIT_NOFILE soft limit to {desired}"));
-    }
-    Ok(())
+    Ok(
+        usize::try_from(limit.rlim_cur.saturating_sub(RESERVED_FILE_DESCRIPTORS))
+            .unwrap_or(usize::MAX)
+            .max(1),
+    )
 }
 
 #[cfg(not(unix))]
-pub(super) fn prepare_open_file_limit(_max_in_flight: usize) -> Result<()> {
-    Ok(())
+pub(super) fn in_flight_limit() -> Result<usize> {
+    Ok(4096)
 }
 
 pub(super) async fn send_request(

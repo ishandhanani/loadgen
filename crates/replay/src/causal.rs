@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -68,21 +69,47 @@ pub(crate) trait CausalWorkload {
 pub(crate) struct CausalExecution {
     pub(crate) accumulator: RunAccumulator,
     pub(crate) elapsed: Duration,
+    pub(crate) peak_in_flight: usize,
     /// `stop_after` ended the run with planned requests unsent.
     pub(crate) stopped_early: bool,
+}
+
+/// HTTP requests currently sent and not yet finished, and the most at once.
+#[derive(Default)]
+struct InFlight {
+    current: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+impl InFlight {
+    fn enter(self: &Arc<Self>) -> InFlightGuard {
+        let current = self.current.fetch_add(1, Ordering::Relaxed) + 1;
+        self.peak.fetch_max(current, Ordering::Relaxed);
+        InFlightGuard(Arc::clone(self))
+    }
+}
+
+struct InFlightGuard(Arc<InFlight>);
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.0.current.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 pub(crate) async fn execute_causally<W: CausalWorkload>(
     workload: &mut W,
     client: reqwest::Client,
     options: &ReplayOptions,
+    in_flight_limit: usize,
 ) -> Result<CausalExecution> {
     let wall_started = Instant::now();
     let base = wall_started
         .checked_add(START_DELAY)
         .context("causal replay start delay exceeds the monotonic clock range")?;
     let context = ReplayContext { client, base };
-    let semaphore = Arc::new(Semaphore::new(options.max_in_flight));
+    let semaphore = Arc::new(Semaphore::new(in_flight_limit));
+    let in_flight = Arc::new(InFlight::default());
     let mut tasks = JoinSet::new();
     let mut scheduler = Scheduler {
         workload,
@@ -135,11 +162,13 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
                 let scheduler_wake = Instant::now();
                 let context = context.clone();
                 let semaphore = Arc::clone(&semaphore);
+                let in_flight = Arc::clone(&in_flight);
                 tasks.spawn(async move {
                     let permit = semaphore
                         .acquire_owned()
                         .await
                         .context("the causal replay request semaphore closed")?;
+                    let _in_flight = in_flight.enter();
                     let result = send_request(
                         &context,
                         scheduled,
@@ -208,6 +237,7 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
     Ok(CausalExecution {
         accumulator: scheduler.sink.finish()?,
         elapsed,
+        peak_in_flight: in_flight.peak.load(Ordering::Relaxed),
         stopped_early,
     })
 }

@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::artifacts::{SummaryIdentity, summarize, write_json, write_timeline};
 use super::causal::{CausalWorkload, Chunk, ChunkNode, execute_causally};
 use super::request::{
-    connect, normalize_target, prepare_open_file_limit, prepare_request, validate_options,
+    connect, in_flight_limit, normalize_target, prepare_request, validate_options,
 };
 use super::{PreparedRequest, ReplayOptions, RequestExecution, RunSummary, TrafficKind};
 use crate::headers::{HeaderInput, Headers, render};
@@ -25,7 +25,7 @@ pub async fn run_agentic_replay(
 ) -> Result<RunSummary> {
     validate_options(&options)?;
     let headers = captured_headers(&trace, options.header_dialect)?;
-    prepare_open_file_limit(options.max_in_flight)?;
+    let in_flight_limit = in_flight_limit()?;
     fs::create_dir_all(&options.output_dir).with_context(|| {
         format!(
             "failed to create output directory {}",
@@ -34,7 +34,7 @@ pub async fn run_agentic_replay(
     })?;
 
     let target = normalize_target(&options.target);
-    let (client, http_version) = connect(&options, &target).await?;
+    let (client, http_version) = connect(&options, &target, in_flight_limit).await?;
     let run_id = Uuid::new_v4().to_string();
     let token_manifest = dictionary.manifest().clone();
     let options = Arc::new(options);
@@ -50,13 +50,15 @@ pub async fn run_agentic_replay(
         options: Arc::clone(&options),
         scheduled: false,
     };
-    let execution = execute_causally(&mut workload, client, &options).await?;
+    let execution = execute_causally(&mut workload, client, &options, in_flight_limit).await?;
     let summary = summarize(
         SummaryIdentity {
             traffic_kind: TrafficKind::CapturedTrace,
             run_id,
             target: &target,
             http_version,
+            in_flight_limit,
+            peak_in_flight: execution.peak_in_flight,
         },
         &trace.manifest,
         &token_manifest,

@@ -81,8 +81,7 @@ Adjust fields and plan again until the summary matches. Plans that fit `limits.m
 ```bash
 agent-loadgen generate --config customer.toml --headers claude-code \
   --model <served-model-name> --target http://<dynamo-frontend>:8000 \
-  --tokenizer <hf-model-id-or-local-dir> --output artifacts/customer-run \
-  --max-in-flight 4096
+  --tokenizer <hf-model-id-or-local-dir> --output artifacts/customer-run
 ```
 
 Generation plans each session tree shortly before it starts and drops it when it completes, so memory follows live sessions rather than the length of the schedule.
@@ -96,6 +95,6 @@ Generation plans each session tree shortly before it starts and drops it when it
 
 ## 5. Read the results
 
-- `run.json` records the header dialect, request and error counts, output-length fidelity, dispatch lag, and `performance`: achieved requests and tokens per second, and TTFT, request latency, and time per output token percentiles.
+- `run.json` records the header dialect, request and error counts, output-length fidelity, dispatch lag, `peak_in_flight` (the most requests the target had in flight at once, which under an arrival schedule is the concurrency the load produced), and `performance`: achieved requests and tokens per second, and TTFT, request latency, and time per output token percentiles.
 - `timeline.csv` has one row per minute: requests, failures, root sessions started, request and token rates, and TTFT and latency percentiles. Compare it with `plan-summary.json`'s arrival buckets.
 - `requests.jsonl` has one row per request. Its `replay_request_id` is the request's `x-request-id`, which joins it with Dynamo request traces and engine telemetry.

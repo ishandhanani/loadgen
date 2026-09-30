@@ -159,7 +159,6 @@ async fn replay_sends_shape_and_agent_headers() {
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
-            max_in_flight: 1,
             timeout: Duration::from_secs(5),
             time_scale: 1.0,
             static_headers: Vec::new(),
@@ -282,7 +281,6 @@ async fn recorded_scheduler_handles_tied_millisecond_arrivals() {
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
-            max_in_flight: 96,
             timeout: Duration::from_secs(5),
             time_scale: 1.0,
             static_headers: Vec::new(),
@@ -383,7 +381,6 @@ async fn captured_successor_waits_for_actual_completion_plus_recorded_gap() {
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
-            max_in_flight: 2,
             timeout: Duration::from_secs(5),
             time_scale: 1.0,
             static_headers: Vec::new(),
@@ -466,7 +463,6 @@ async fn generated_graph_releases_tool_successor_after_completion() {
             model: "test-model".to_string(),
             target: format!("http://{address}"),
             output_dir: output.path().to_path_buf(),
-            max_in_flight: 2,
             timeout: Duration::from_secs(5),
             time_scale: 100.0,
             static_headers: Vec::new(),
@@ -567,7 +563,6 @@ async fn generated_claude_headers_reach_the_wire() {
             model: "test-model".to_string(),
             target,
             output_dir: output.path().to_path_buf(),
-            max_in_flight: 2,
             timeout: Duration::from_secs(5),
             time_scale: 100.0,
             static_headers: Vec::new(),
@@ -608,7 +603,6 @@ fn harness_headers_cannot_be_overridden_with_static_headers() {
         model: "test-model".to_string(),
         target: "http://localhost:8000".to_string(),
         output_dir: std::path::PathBuf::from("unused"),
-        max_in_flight: 1,
         timeout: Duration::from_secs(1),
         time_scale: 1.0,
         static_headers: Vec::new(),
@@ -638,7 +632,6 @@ fn quick_options(target: String, output: &std::path::Path, time_scale: f64) -> R
         model: "test-model".to_string(),
         target,
         output_dir: output.to_path_buf(),
-        max_in_flight: 64,
         timeout: Duration::from_secs(5),
         time_scale,
         static_headers: Vec::new(),
@@ -785,7 +778,7 @@ async fn connect_prefers_h2c_and_falls_back_to_http1() {
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let output = tempdir().unwrap();
     let options = quick_options(target.clone(), output.path(), 1.0);
-    let (_, version) = super::request::connect(&options, &normalize_target(&target))
+    let (_, version) = super::request::connect(&options, &normalize_target(&target), 16)
         .await
         .unwrap();
     assert_eq!(version, "h2c");
@@ -812,7 +805,7 @@ async fn connect_prefers_h2c_and_falls_back_to_http1() {
         }
     });
     let options = quick_options(target.clone(), output.path(), 1.0);
-    let (_, version) = super::request::connect(&options, &normalize_target(&target))
+    let (_, version) = super::request::connect(&options, &normalize_target(&target), 16)
         .await
         .unwrap();
     assert_eq!(version, "http/1.1");
@@ -867,5 +860,46 @@ async fn a_blocked_result_file_does_not_delay_dispatch() {
         summary.dispatch_lag_ms
     );
     assert_eq!(reader.join().unwrap(), requests);
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_reports_peak_requests_in_flight() {
+    async fn slow_endpoint() -> Response<Body> {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(Body::from(
+                "data: {\"choices\":[],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n",
+            ))
+            .unwrap()
+    }
+    let app = Router::new().route("/v1/chat/completions", post(slow_endpoint));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    // Four workers, two one-request sessions each: at most four requests at once.
+    let config = GeneratorConfig::parse(&format!(
+        "schema_version = 5\nseed = 3\n[load]\nnum_sessions = 8\nconcurrent_sessions = 4\n{ONE_TURN}"
+    ))
+    .unwrap();
+    let planner = TreePlanner::new(config.resolve().unwrap()).unwrap();
+    let dictionary = TokenDictionary::new(
+        16,
+        0,
+        SafeTokenAlphabet::from_unverified_range(100, 1024, &[]).unwrap(),
+    )
+    .unwrap();
+    let output = tempdir().unwrap();
+    let summary = run_generated(
+        &planner,
+        dictionary,
+        quick_options(target, output.path(), 1.0),
+    )
+    .await
+    .unwrap();
+    assert_eq!(summary.request_count, 8);
+    assert_eq!(summary.peak_in_flight, 4);
+    assert!(summary.in_flight_limit > 4);
     server.abort();
 }

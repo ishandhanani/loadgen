@@ -39,7 +39,6 @@ pub struct ReplayOptions {
     pub model: String,
     pub target: String,
     pub output_dir: PathBuf,
-    pub max_in_flight: usize,
     pub timeout: Duration,
     /// Divide recorded offsets and delays by this value.
     pub time_scale: f64,
@@ -86,7 +85,12 @@ pub struct RunSummary {
     pub model: String,
     pub target: String,
     pub time_scale: f64,
-    pub max_in_flight: usize,
+    /// Requests the client allows in flight at once, sized from the
+    /// open-file limit so it guards the client, not the load.
+    pub in_flight_limit: usize,
+    /// Most requests in flight at once. If it equals `in_flight_limit`, the
+    /// client held back requests the profile or trace would have sent.
+    pub peak_in_flight: usize,
     /// HTTP version of the connection to the target: `h2c`, `http/1.1`, or `h2`.
     pub http_version: &'static str,
     pub timer_backend: &'static str,
