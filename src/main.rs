@@ -56,10 +56,6 @@ async fn main() -> Result<()> {
                 bail!("some generated requests failed or missed their planned output length");
             }
         }
-        Command::Serve { listen } => {
-            agent_loadgen_serve::init_tracing();
-            agent_loadgen_serve::run(listen).await?;
-        }
     }
     Ok(())
 }

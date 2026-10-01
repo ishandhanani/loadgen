@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use agent_loadgen_core::HeaderDialect;
@@ -105,12 +104,5 @@ pub enum Command {
 
         #[command(flatten)]
         run: RunArgs,
-    },
-
-    /// Serve plan previews over HTTP for the traces dashboard.
-    Serve {
-        /// Address to listen on.
-        #[arg(long, default_value = "127.0.0.1:8096")]
-        listen: SocketAddr,
     },
 }

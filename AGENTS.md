@@ -37,7 +37,6 @@ The generator does not support child roles, per-child profiles, child-to-child m
 | `crates/core/` | Header dialect enum, agent context, request contract, percentiles, and stable ready-time queue. No I/O or workload policy. |
 | `crates/generate/` | Strict profile schema, deterministic sampling, serialized scenarios, and synthetic graph planning. |
 | `crates/replay/` | Token synthesis, harness headers, HTTP/SSE transport, the causal scheduler, and run artifacts. |
-| `crates/serve/` | HTTP service for the traces dashboard: in-process plan previews and their metrics. Depends on `generate`; nothing depends on it. |
 | `src/` | Thin `agent-loadgen` CLI: flags, command composition, and exit behavior. |
 | `profiles/` | Example profiles: harness- and workload-calibrated shapes and an arrival schedule; shape only, no header selection. |
 | `docs/` | Architecture and detailed usage guides. |
@@ -50,7 +49,7 @@ The generator does not support child roles, per-child profiles, child-to-child m
 - Keep the profile schema strict. Reject unknown fields.
 - Keep prompt semantics and tool execution out of scope.
 - Keep cache-policy decisions out of this repository.
-- Keep `core` free of HTTP, Tokio, tokenizers, and generator policy. Among this workspace's crates, `generate` may depend only on `core`; `replay` may consume both but `generate` may not depend on `replay`; `serve` may consume them and no crate depends on `serve`.
+- Keep `core` free of HTTP, Tokio, tokenizers, and generator policy. Among this workspace's crates, `generate` may depend only on `core`; `replay` may consume both, and `generate` may not depend on `replay`.
 - Add behavior details to `docs/`. Keep `README.md` as a short entry point.
 - Keep compaction and subagent behavior in their dedicated guides.
 - Update tests and docs when a timing, token-shape, or dependency contract changes.
