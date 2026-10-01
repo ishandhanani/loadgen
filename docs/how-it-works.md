@@ -130,26 +130,25 @@ Cache policy remains outside this project.
 ## Crate map
 
 ```text
-       agent-loadgen CLI
-        |            |
-        v            v
-      replay       serve
-        |            |
-        v            |
-     generate <------+
+agent-loadgen CLI
+        |
+        v
+      replay
+        |
+        v
+     generate
         |
         v
        core
 ```
 
-`core` has no I/O or workload policy. `generate` plans traffic; `replay` is the runtime that sends it; `serve` previews plans for the dashboard.
+`core` has no I/O or workload policy. `generate` plans traffic; `replay` is the runtime that sends it.
 
 | Crate | Responsibility |
 |---|---|
 | `agent-loadgen-core` | Public request and agent-context contracts, percentile summaries, and the stable ready-time queue. |
 | `agent-loadgen-generate` | Neutral defaults, strict TOML profile validation, seeded distributions, and generated scenario planning. |
 | `agent-loadgen-replay` | Token shaping, request transport, harness headers, the causal scheduler, and run artifacts. |
-| `agent-loadgen-serve` | HTTP plan previews for the traces dashboard. |
 | `agent-loadgen` | CLI flags and command wiring only. |
 
 `AGENTS.md` records the dependency rules between the crates.
