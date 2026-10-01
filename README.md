@@ -14,7 +14,17 @@ Prompt text is synthetic. The fidelity contract is request shape, KV reuse, agen
 
 Traffic shape and wire protocol are separate. The profile defines shape. The required `--headers {claude-code|codex}` flag on `generate` selects which harness the requests look like: each dialect sends only that harness's own session, subagent, and compaction headers, and Dynamo derives session identity from them. See [Harness headers](docs/headers.md).
 
-## Build
+## Install
+
+Every commit on `main` that passes CI is published as a release with Linux binaries for x86_64 and aarch64 that need only glibc 2.34 or newer, as in Ubuntu 22.04 and current SGLang and Dynamo containers. The repository is internal, so download with an authenticated `gh`; without a tag it takes the latest release:
+
+```bash
+gh release download -R NVIDIA-dev/agent-loadgen --pattern 'agent-loadgen-x86_64-unknown-linux-gnu.tar.gz'
+tar xzf agent-loadgen-x86_64-unknown-linux-gnu.tar.gz
+agent-loadgen-x86_64-unknown-linux-gnu/agent-loadgen --help
+```
+
+On Arm hosts such as Grace, use `aarch64-unknown-linux-gnu`. To build from source instead:
 
 ```bash
 cargo build --release

@@ -81,3 +81,5 @@ done
 ## Git
 
 Use `origin` for NVIDIA-dev/agent-loadgen. Do not push this repository to the old `cas` remote. Push only when the user asks. Sign commits with DCO and keep one logical change in each commit. Do not add generated attribution or coauthor lines.
+
+Releases are automatic: every commit on `main` that passes CI is published by `.github/workflows/release.yml` as `v<major>.<minor>.<commits on main>` with x86_64 and aarch64 Linux binaries. Major and minor come from `[workspace.package]` in `Cargo.toml`; change them only when the user asks.
