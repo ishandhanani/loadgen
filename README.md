@@ -72,15 +72,13 @@ Generated traffic is closed-loop inside each session: model latency, tool time, 
 
 ## Serve the dashboard API
 
-Run the HTTP service that turns dashboard sessions into replay bundles and TOML profiles into plan previews, all in process:
+Run the HTTP service that turns TOML profiles into plan previews for the traces dashboard, in process:
 
 ```bash
-target/release/agent-loadgen serve \
-  --root ~/dynamo-traces \
-  --listen 127.0.0.1:8096
+target/release/agent-loadgen serve --listen 127.0.0.1:8096
 ```
 
-It reads dashboard data under `--root`, scans the request-trace object store with credentials from `~/.config/dynamo-traces/env`, and writes job artifacts to `<root>/loadgen-jobs/`. It never sends load itself. See [HTTP service](docs/serve.md).
+It never sends load itself. See [HTTP service](docs/serve.md).
 
 ## Outputs
 
@@ -98,7 +96,7 @@ It reads dashboard data under `--root`, scans the request-trace object store wit
 - [Generator configuration](docs/generator.md): profiles, load models, distributions, tools, limits, and every default.
 - [Subagents and swarms](docs/subagents.md): delegation graphs, joins, lineage, KV sharing, and current limits.
 - [Compaction](docs/compaction.md): trigger logic, physical attempts, KV-window changes, and telemetry boundaries.
-- [HTTP service](docs/serve.md): `agent-loadgen serve` endpoints, replay-bundle job model, caches and limits, and deployment behind Caddy.
+- [HTTP service](docs/serve.md): `agent-loadgen serve` endpoints, metrics, and deployment behind Caddy.
 
 ## Current boundaries
 

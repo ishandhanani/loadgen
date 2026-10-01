@@ -40,7 +40,7 @@ The generator does not support child roles, per-child profiles, child-to-child m
 | `crates/trace/` | Trace v1 parsing, validation, and Dynamo-derived causal lowering. |
 | `crates/generate/` | Strict profile schema, deterministic sampling, serialized scenarios, and synthetic graph planning. |
 | `crates/replay/` | Token synthesis, harness headers, HTTP/SSE transport, causal schedulers, and run artifacts. |
-| `crates/serve/` | HTTP service for the traces dashboard: in-process plan previews, replay-bundle export from the trace store, job state, caches, and limits. Depends on `trace`, `generate`, and `replay`; nothing depends on it. |
+| `crates/serve/` | HTTP service for the traces dashboard: in-process plan previews and their metrics. Depends on `generate`; nothing depends on it. |
 | `src/` | Thin `agent-loadgen` CLI: flags, command composition, and exit behavior. |
 | `profiles/` | Example profiles: harness- and workload-calibrated shapes and an arrival schedule; shape only, no header selection. |
 | `docs/` | Architecture and detailed usage guides. |

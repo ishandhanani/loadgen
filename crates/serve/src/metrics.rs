@@ -14,8 +14,8 @@ use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use prometheus::{
-    Encoder, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge,
-    IntGaugeVec, Opts, Registry, TextEncoder,
+    Encoder, Histogram, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, Opts, Registry,
+    TextEncoder,
 };
 
 use crate::AppState;
@@ -54,25 +54,9 @@ pub struct Metrics {
     pub http_requests: IntCounterVec,
     pub http_request_duration: HistogramVec,
     pub jobs: IntCounterVec,
-    pub shards_scanned: IntCounter,
-    pub shard_bytes: IntCounter,
-    pub lines_scanned: IntCounter,
-    pub records_kept: IntCounter,
-    pub zero_output_dropped: IntCounter,
-    pub s3_errors: IntCounter,
     pub rejected: IntCounterVec,
     pub jobs_inflight: IntGaugeVec,
-    pub jobs_queued: IntGauge,
     pub plan_duration: Histogram,
-    pub bundle_job_duration: HistogramVec,
-}
-
-fn counter(registry: &Registry, name: &str, help: &str) -> IntCounter {
-    let metric = IntCounter::new(name, help).expect("valid metric definition");
-    registry
-        .register(Box::new(metric.clone()))
-        .expect("unique metric name");
-    metric
 }
 
 fn counter_vec(registry: &Registry, name: &str, help: &str, labels: &[&str]) -> IntCounterVec {
@@ -120,43 +104,13 @@ impl Metrics {
         let jobs = counter_vec(
             &registry,
             "loadgen_serve_jobs_total",
-            "Jobs by kind (replay, plan) and result (done, error, cached).",
+            "Plan previews by result (done, error).",
             &["kind", "result"],
-        );
-        let shards_scanned = counter(
-            &registry,
-            "loadgen_serve_shards_scanned_total",
-            "Trace shards scanned by bundle jobs.",
-        );
-        let shard_bytes = counter(
-            &registry,
-            "loadgen_serve_shard_bytes_total",
-            "Compressed shard bytes downloaded from the trace store.",
-        );
-        let lines_scanned = counter(
-            &registry,
-            "loadgen_serve_lines_scanned_total",
-            "Trace lines read while scanning shards.",
-        );
-        let records_kept = counter(
-            &registry,
-            "loadgen_serve_records_kept_total",
-            "Trace records written to bundles after merge and deduplication.",
-        );
-        let zero_output_dropped = counter(
-            &registry,
-            "loadgen_serve_zero_output_dropped_total",
-            "request_end records dropped for zero output tokens.",
-        );
-        let s3_errors = counter(
-            &registry,
-            "loadgen_serve_s3_errors_total",
-            "Failed shard listing or download calls.",
         );
         let rejected = counter_vec(
             &registry,
             "loadgen_serve_rejected_total",
-            "Requests refused by reason (per_ip_cap, too_many_hours, bad_request, not_found).",
+            "Requests refused as bad requests.",
             &["reason"],
         );
         let jobs_inflight = IntGaugeVec::new(
@@ -169,14 +123,6 @@ impl Metrics {
         .expect("valid metric definition");
         registry
             .register(Box::new(jobs_inflight.clone()))
-            .expect("unique metric name");
-        let jobs_queued = IntGauge::new(
-            "loadgen_serve_jobs_queued",
-            "Bundle jobs waiting for a scan permit.",
-        )
-        .expect("valid metric definition");
-        registry
-            .register(Box::new(jobs_queued.clone()))
             .expect("unique metric name");
         let build_info = IntGaugeVec::new(
             Opts::new("loadgen_serve_build_info", "Build information; always 1."),
@@ -205,7 +151,7 @@ impl Metrics {
         let active_clients = IntGaugeVec::new(
             Opts::new(
                 "loadgen_serve_active_clients",
-                "Distinct clients that submitted a job within the window.",
+                "Distinct clients that requested a plan within the window.",
             ),
             &["window"],
         )
@@ -219,28 +165,15 @@ impl Metrics {
         let client_jobs = counter_vec(
             &registry,
             "loadgen_serve_client_jobs_total",
-            "Accepted job submissions by client and kind, including cache hits.",
+            "Accepted plan requests by client.",
             &["client", "kind"],
         );
-        let bundle_job_duration = histogram_vec(
-            &registry,
-            "loadgen_serve_bundle_job_duration_seconds",
-            "Wall time of bundle jobs including queue time, by result (done, error).",
-            &["result"],
-            vec![
-                0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0,
-            ],
-        );
         // Pre-create the label sets the dashboard queries so they exist at 0.
-        for kind in ["replay", "plan"] {
-            jobs_inflight.with_label_values(&[kind]).set(0);
-            for result in ["done", "error", "cached"] {
-                jobs.with_label_values(&[kind, result]).reset();
-            }
+        jobs_inflight.with_label_values(&["plan"]).set(0);
+        for result in ["done", "error"] {
+            jobs.with_label_values(&["plan", result]).reset();
         }
-        for reason in ["per_ip_cap", "too_many_hours", "bad_request", "not_found"] {
-            rejected.with_label_values(&[reason]).reset();
-        }
+        rejected.with_label_values(&["bad_request"]).reset();
         Self {
             registry,
             clients: Mutex::new(Clients::default()),
@@ -249,17 +182,9 @@ impl Metrics {
             http_requests,
             http_request_duration,
             jobs,
-            shards_scanned,
-            shard_bytes,
-            lines_scanned,
-            records_kept,
-            zero_output_dropped,
-            s3_errors,
             rejected,
             jobs_inflight,
-            jobs_queued,
             plan_duration,
-            bundle_job_duration,
         }
     }
 
@@ -267,7 +192,7 @@ impl Metrics {
         self.jobs.with_label_values(&[kind, result]).inc();
     }
 
-    /// Record an accepted `POST /plan` or `POST /replay-bundle` from `client`.
+    /// Record an accepted `POST /plan` from `client`.
     pub fn job_submitted(&self, client: &str, kind: &str) {
         self.job_submitted_at(client, kind, Instant::now());
     }
@@ -386,7 +311,7 @@ mod tests {
         let metrics = Metrics::new();
         let now = Instant::now();
         metrics.job_submitted_at("10.0.0.1", "plan", now);
-        metrics.job_submitted_at("10.0.0.2", "replay", now - Duration::from_secs(20 * 60));
+        metrics.job_submitted_at("10.0.0.2", "plan", now - Duration::from_secs(20 * 60));
         metrics.job_submitted_at("10.0.0.3", "plan", now - Duration::from_secs(25 * 60 * 60));
         metrics.refresh_active_clients(now);
         assert_eq!(gauge(&metrics, "15m"), 1);
