@@ -13,13 +13,13 @@ The recipe mounts one directory at `/loadgen`. Put the binary, profiles, script,
 ```bash
 S=/path/to/session            # on the cluster's shared filesystem
 mkdir -p $S/bin $S/profiles $S/artifacts
-gh release download -R NVIDIA-dev/agent-loadgen --pattern 'agent-loadgen-x86_64-unknown-linux-gnu.tar.gz' -O - \
-  | tar xz --strip-components=1 -C $S/bin agent-loadgen-x86_64-unknown-linux-gnu/agent-loadgen
+gh release download -R NVIDIA-dev/agent-loadgen --pattern agent-loadgen --output $S/bin/agent-loadgen
+chmod +x $S/bin/agent-loadgen
 cp profiles/*.toml $S/profiles/
 cp examples/srt-slurm/run.sh examples/srt-slurm/runs.txt $S/
 ```
 
-Use the `aarch64-unknown-linux-gnu` archive on Grace nodes, or `cargo build --release` for a source build. Release binaries link only glibc (2.34 or newer) and need no OpenSSL, so they run in current SGLang and Dynamo containers. Edit the recipe's `model`, `extra_mount`, and `LOADGEN_MODEL`, and write the profiles and load files that `runs.txt` names, such as a profile with `duration_minutes` added to its `[load]` section or a `[load.arrivals]` schedule; see [Describe a workload](../../docs/workloads.md). Then submit from the srt-slurm checkout:
+On Grace nodes, download `agent-loadgen-aarch64` instead, or use `cargo build --release` for a source build. Release binaries link only glibc (2.34 or newer) and need no OpenSSL, so they run in current SGLang and Dynamo containers. Edit the recipe's `model`, `extra_mount`, and `LOADGEN_MODEL`, and write the profiles and load files that `runs.txt` names, such as a profile with `duration_minutes` added to its `[load]` section or a `[load.arrivals]` schedule; see [Describe a workload](../../docs/workloads.md). Then submit from the srt-slurm checkout:
 
 ```bash
 uv run srtctl dry-run -f recipe.yaml

@@ -55,7 +55,11 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            asset: agent-loadgen
+          - target: aarch64-unknown-linux-gnu
+            asset: agent-loadgen-aarch64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,16 +86,12 @@ jobs:
           cargo update --workspace
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p agent-loadgen
-      - name: Package
-        run: |
-          name=agent-loadgen-${{ matrix.target }}
-          mkdir "$name"
-          cp target/${{ matrix.target }}/release/agent-loadgen LICENSE NOTICE README.md "$name"/
-          tar czf "$name.tar.gz" "$name"
+      - name: Name the binary
+        run: cp target/${{ matrix.target }}/release/agent-loadgen ${{ matrix.asset }}
       - uses: actions/upload-artifact@v4
         with:
-          name: agent-loadgen-${{ matrix.target }}
-          path: agent-loadgen-${{ matrix.target }}.tar.gz
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
           if-no-files-found: error
 
   release:
@@ -110,7 +110,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           cd dist
-          sha256sum *.tar.gz > SHA256SUMS
-          gh release create "v$VERSION" *.tar.gz SHA256SUMS \
+          sha256sum agent-loadgen agent-loadgen-aarch64 > SHA256SUMS
+          gh release create "v$VERSION" agent-loadgen agent-loadgen-aarch64 SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --target "$SHA" \
             --title "agent-loadgen v$VERSION" --generate-notes
