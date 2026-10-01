@@ -41,7 +41,7 @@ pub struct GeneratedNode {
     pub window_epoch: usize,
     pub tool_events: Vec<GeneratedToolEvent>,
     pub spawned_session_ids: Vec<String>,
-    pub output_budget_tokens: Option<u32>,
+    pub output_budget_tokens: u32,
     pub compaction_attempt: Option<GeneratedCompactionAttempt>,
     /// True for the last model request of its protocol session.
     pub session_final: bool,

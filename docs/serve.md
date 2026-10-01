@@ -37,7 +37,7 @@ Response:
 }
 ```
 
-`summary` is exactly the `plan-summary.json` that `agent-loadgen plan` writes; see [Describe a workload](workloads.md). `timeline` draws whole trees, from the first, until it holds at least 2,000 requests. `timeline.nodes[].a` is the planned action (`text`, `tool`, `parallel_tools`, `subagent`, `swarm`, `compaction_attempt`, `complete`); `out` is the output budget when present, else the request's output tokens; `wait` is the summed tool latency; `spawn` lists spawned session indices.
+`summary` is exactly the `plan-summary.json` that `agent-loadgen plan` writes; see [Describe a workload](workloads.md). `timeline` draws whole trees, from the first, until it holds at least 2,000 requests. `timeline.nodes[].a` is the planned action (`text`, `tool`, `parallel_tools`, `subagent`, `swarm`, `compaction_attempt`, `complete`); `out` is the output budget; `wait` is the summed tool latency; `spawn` lists spawned session indices.
 
 ## Metrics
 

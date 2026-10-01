@@ -275,7 +275,7 @@ struct NodeSpec<'a> {
     action: &'a str,
     input_trigger: &'a str,
     logical_output_tokens: u64,
-    output_budget_tokens: Option<u64>,
+    output_budget_tokens: u64,
     compaction: Option<serde_json::Value>,
     compaction_attempt: Option<GeneratedCompactionAttempt>,
 }
@@ -414,7 +414,7 @@ impl TreeBuilder<'_> {
                     action: action.name(),
                     input_trigger: next_trigger,
                     logical_output_tokens: output_tokens,
-                    output_budget_tokens: Some(output_tokens),
+                    output_budget_tokens: output_tokens,
                     compaction: None,
                     compaction_attempt: None,
                 },
@@ -676,7 +676,7 @@ impl TreeBuilder<'_> {
                     } else {
                         0
                     },
-                    output_budget_tokens: Some(summary_tokens),
+                    output_budget_tokens: summary_tokens,
                     compaction: Some(compaction),
                     compaction_attempt: Some(attempt_metadata),
                 },
@@ -750,10 +750,7 @@ impl TreeBuilder<'_> {
         }
         let output_tokens = u32::try_from(spec.logical_output_tokens)
             .context("generated output token count does not fit u32")?;
-        let output_budget_tokens = spec
-            .output_budget_tokens
-            .map(u32::try_from)
-            .transpose()
+        let output_budget_tokens = u32::try_from(spec.output_budget_tokens)
             .context("generated output budget does not fit u32")?;
         if output_tokens == 0 && spec.compaction_attempt.is_none() {
             bail!("generated request output must be greater than zero");
@@ -766,11 +763,8 @@ impl TreeBuilder<'_> {
                 "generated-{:016x}-t{}-n{ordinal}",
                 self.config.seed, self.index
             ),
-            source_x_request_id: None,
-            source_model: None,
             input_tokens,
             output_tokens,
-            request_received_ms: spec.initial_arrival_ms.unwrap_or(0),
             trace_block_size: self.config.block_size,
             input_sequence_hashes,
             agent_context: Some(AgentContext {

@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use agent_loadgen_core::HeaderDialect;
-use agent_loadgen_replay::token_shape::{SafeTokenAlphabet, TokenAlphabetSource};
+use agent_loadgen_replay::token_shape::SafeTokenAlphabet;
 use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
 
@@ -26,7 +26,7 @@ pub struct TokenArgs {
 
 impl TokenArgs {
     pub fn load(self) -> Result<SafeTokenAlphabet> {
-        SafeTokenAlphabet::load(TokenAlphabetSource::Tokenizer(self.tokenizer), 1024, &[])
+        SafeTokenAlphabet::from_tokenizer(&self.tokenizer, 1024, &[])
     }
 }
 

@@ -17,11 +17,8 @@ pub struct AgentContext {
 pub struct TraceRequest {
     pub ordinal: usize,
     pub source_request_id: String,
-    pub source_x_request_id: Option<String>,
-    pub source_model: Option<String>,
     pub input_tokens: usize,
     pub output_tokens: u32,
-    pub request_received_ms: u64,
     pub trace_block_size: usize,
     pub input_sequence_hashes: Vec<u64>,
     pub agent_context: Option<AgentContext>,

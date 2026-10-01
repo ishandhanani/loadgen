@@ -142,7 +142,6 @@ async fn generated_graph_releases_tool_successor_after_completion() {
     .await
     .unwrap();
     assert_eq!(summary.succeeded, 2);
-    assert_eq!(summary.budgeted_requests, 2);
     assert_eq!(summary.output_length_matches, 2);
     assert_eq!(summary.plan.top_level_sessions, 1);
     assert_eq!(summary.plan.subagent_sessions, 0);

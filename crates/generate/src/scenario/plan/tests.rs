@@ -157,7 +157,7 @@ fn compaction_attempts_share_identity_and_apply_once() {
         attempt.operation_id == operation.operation_id
             && attempt.phase == operation.phase
             && attempt.attempt == index + 1
-            && node.output_budget_tokens.is_some_and(|budget| budget > 0)
+            && node.output_budget_tokens > 0
     }));
 }
 

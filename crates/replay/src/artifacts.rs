@@ -81,8 +81,6 @@ impl ResultSink {
 pub(super) struct RunAccumulator {
     pub(super) request_count: usize,
     succeeded: usize,
-    budgeted_requests: usize,
-    unbudgeted_requests: usize,
     planned_aborts: usize,
     output_length_matches: usize,
     output_length_mismatches: usize,
@@ -119,8 +117,6 @@ impl RunAccumulator {
         Ok(Self {
             request_count: 0,
             succeeded: 0,
-            budgeted_requests: 0,
-            unbudgeted_requests: 0,
             planned_aborts: 0,
             output_length_matches: 0,
             output_length_mismatches: 0,
@@ -149,15 +145,10 @@ impl RunAccumulator {
             self.succeeded += 1;
         }
         self.record_performance(result, succeeded)?;
-        if result.expected_output_tokens.is_some() {
-            self.budgeted_requests += 1;
-            match result.output_length_match {
-                Some(true) => self.output_length_matches += 1,
-                Some(false) => self.output_length_mismatches += 1,
-                None => self.missing_output_usage += 1,
-            }
-        } else {
-            self.unbudgeted_requests += 1;
+        match result.output_length_match {
+            Some(true) => self.output_length_matches += 1,
+            Some(false) => self.output_length_mismatches += 1,
+            None => self.missing_output_usage += 1,
         }
         if result.compaction_expected_effect == Some(CompactionExpectedEffect::NoMutationAborted) {
             self.planned_aborts += 1;
@@ -333,7 +324,7 @@ pub(super) fn summarize(
     // A run stopped by `stop_after` is judged on the requests it sent.
     let passed = (stopped_early || accumulator.request_count == plan.requests)
         && accumulator.succeeded == accumulator.request_count
-        && accumulator.output_length_matches == accumulator.budgeted_requests
+        && accumulator.output_length_matches == accumulator.request_count
         && accumulator.missing_output_usage == 0
         && accumulator.planned_abort_matches == accumulator.planned_aborts;
     RunSummary {
@@ -351,12 +342,9 @@ pub(super) fn summarize(
             .iter()
             .map(|(name, _)| name.clone())
             .collect(),
-        protocol_surface: "chat_completions",
         plan,
         token_dictionary: dictionary.clone(),
         request_count: accumulator.request_count,
-        budgeted_requests: accumulator.budgeted_requests,
-        unbudgeted_requests: accumulator.unbudgeted_requests,
         planned_aborts: accumulator.planned_aborts,
         succeeded: accumulator.succeeded,
         failed: accumulator.request_count - accumulator.succeeded,

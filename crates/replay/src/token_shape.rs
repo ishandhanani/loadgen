@@ -39,56 +39,13 @@ pub struct TokenAlphabetManifest {
     pub token_ids_digest_sha256: String,
 }
 
-#[derive(Debug, Clone)]
-pub enum TokenAlphabetSource {
-    Tokenizer(String),
-    UnverifiedRange { start: u32, size: u32 },
-}
-
 impl SafeTokenAlphabet {
-    pub fn load(
-        source: TokenAlphabetSource,
-        limit: usize,
-        extra_excluded_ids: &[u32],
-    ) -> Result<Self> {
+    /// The first `limit` ordinary token IDs of a tokenizer: a Hugging Face
+    /// model ID, or a local `tokenizer.json` or model directory.
+    pub fn from_tokenizer(source: &str, limit: usize, extra_excluded_ids: &[u32]) -> Result<Self> {
         if limit < 2 {
             bail!("token alphabet size must be at least two");
         }
-        match source {
-            TokenAlphabetSource::Tokenizer(source) => {
-                Self::from_tokenizer(&source, limit, extra_excluded_ids)
-            }
-            TokenAlphabetSource::UnverifiedRange { start, size } => {
-                Self::from_unverified_range(start, size, extra_excluded_ids)
-            }
-        }
-    }
-
-    pub(crate) fn from_unverified_range(
-        start: u32,
-        size: u32,
-        extra_excluded_ids: &[u32],
-    ) -> Result<Self> {
-        if size < 2 {
-            bail!("token alphabet size must be at least two");
-        }
-        let end = start
-            .checked_add(size)
-            .context("token alphabet exceeds u32")?;
-        let excluded = extra_excluded_ids.iter().copied().collect::<BTreeSet<_>>();
-        let token_ids = (start..end)
-            .filter(|token_id| !excluded.contains(token_id))
-            .collect::<Vec<_>>();
-        Self::finish(
-            token_ids,
-            format!("unverified-range:{start}:{size}"),
-            false,
-            None,
-            excluded.len(),
-        )
-    }
-
-    fn from_tokenizer(source: &str, limit: usize, extra_excluded_ids: &[u32]) -> Result<Self> {
         let files = TokenizerFiles::resolve(source)?;
         let tokenizer = Tokenizer::from_file(&files.tokenizer_json).map_err(|error| {
             anyhow::anyhow!(
@@ -127,6 +84,31 @@ impl SafeTokenAlphabet {
             files.source,
             true,
             Some(hex::encode(Sha256::digest(tokenizer_bytes))),
+            excluded.len(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_unverified_range(
+        start: u32,
+        size: u32,
+        extra_excluded_ids: &[u32],
+    ) -> Result<Self> {
+        if size < 2 {
+            bail!("token alphabet size must be at least two");
+        }
+        let end = start
+            .checked_add(size)
+            .context("token alphabet exceeds u32")?;
+        let excluded = extra_excluded_ids.iter().copied().collect::<BTreeSet<_>>();
+        let token_ids = (start..end)
+            .filter(|token_id| !excluded.contains(token_id))
+            .collect::<Vec<_>>();
+        Self::finish(
+            token_ids,
+            format!("unverified-range:{start}:{size}"),
+            false,
+            None,
             excluded.len(),
         )
     }
@@ -446,11 +428,8 @@ mod tests {
         TraceRequest {
             ordinal: 0,
             source_request_id: id.to_string(),
-            source_x_request_id: None,
-            source_model: None,
             input_tokens,
             output_tokens: 2,
-            request_received_ms: 1,
             trace_block_size: 4,
             input_sequence_hashes: hashes.to_vec(),
             agent_context: None,
@@ -549,12 +528,9 @@ mod tests {
         )
         .unwrap();
 
-        let alphabet = SafeTokenAlphabet::load(
-            TokenAlphabetSource::Tokenizer(directory.path().display().to_string()),
-            16,
-            &[],
-        )
-        .unwrap();
+        let alphabet =
+            SafeTokenAlphabet::from_tokenizer(&directory.path().display().to_string(), 16, &[])
+                .unwrap();
         assert_eq!(alphabet.token_ids, vec![0, 1, 2]);
         assert!(alphabet.manifest.verified);
         assert_eq!(alphabet.manifest.excluded_token_count, 1);

@@ -123,7 +123,7 @@ Frontend-observed arrival is different from client dispatch. A Dynamo request tr
 
 ## Artifacts and claims
 
-`run.json` labels the protocol surface and HTTP version, records what the run planned, and reports achieved throughput with TTFT, request latency, and time-per-output-token percentiles. `timeline.csv` breaks the same measurements into one-minute buckets. A run passes when every sent request succeeded with its planned output length; client dispatch lag is reported, not gated.
+`run.json` records the HTTP version and what the run planned, and reports achieved throughput with TTFT, request latency, and time-per-output-token percentiles. `timeline.csv` breaks the same measurements into one-minute buckets. A run passes when every sent request succeeded with its planned output length; client dispatch lag is reported, not gated.
 
 Cache policy remains outside this project.
 

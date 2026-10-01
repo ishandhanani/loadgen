@@ -45,7 +45,6 @@ pub struct ReplayOptions {
 pub(crate) struct RequestResult {
     pub ordinal: usize,
     pub source_request_id: String,
-    pub source_x_request_id: Option<String>,
     pub replay_request_id: String,
     pub session_id: Option<String>,
     pub parent_session_id: Option<String>,
@@ -56,7 +55,7 @@ pub(crate) struct RequestResult {
     pub dispatch_lag_ms: f64,
     pub local_admission_lag_ms: f64,
     pub expected_input_tokens: usize,
-    pub expected_output_tokens: Option<u32>,
+    pub expected_output_tokens: u32,
     pub observed_output_tokens: Option<u64>,
     pub output_length_match: Option<bool>,
     pub compaction_operation_id: Option<String>,
@@ -88,12 +87,9 @@ pub struct RunSummary {
     pub http_version: &'static str,
     pub timer_backend: &'static str,
     pub static_header_names: Vec<String>,
-    pub protocol_surface: &'static str,
     pub plan: RunPlan,
     pub token_dictionary: TokenDictionaryManifest,
     pub request_count: usize,
-    pub budgeted_requests: usize,
-    pub unbudgeted_requests: usize,
     pub planned_aborts: usize,
     pub succeeded: usize,
     pub failed: usize,
@@ -155,18 +151,17 @@ struct PreparedRequest {
 struct PreparedMetadata {
     ordinal: usize,
     source_request_id: String,
-    source_x_request_id: Option<String>,
     replay_request_id: String,
     agent_context: Option<AgentContext>,
     input_tokens: usize,
-    expected_output_tokens: Option<u32>,
+    expected_output_tokens: u32,
     compaction_attempt: Option<GeneratedCompactionAttempt>,
 }
 
 struct RequestExecution {
     /// Harness headers rendered for this request.
     headers: headers::Headers,
-    output_budget_tokens: Option<u32>,
+    output_budget_tokens: u32,
     compaction_attempt: Option<GeneratedCompactionAttempt>,
     /// Last request of its protocol session; see `ReplayOptions::dynamo_session_final`.
     session_final: bool,

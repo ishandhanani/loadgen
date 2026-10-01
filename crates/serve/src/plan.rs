@@ -97,9 +97,7 @@ pub fn timeline(planner: &TreePlanner) -> Result<Timeline> {
                     o: first_node + local,
                     a: node.action.clone(),
                     input_tokens: node.request.input_tokens,
-                    out: node
-                        .output_budget_tokens
-                        .unwrap_or(node.request.output_tokens),
+                    out: node.output_budget_tokens,
                     tools: node.tool_events.len(),
                     wait: node.tool_events.iter().map(|event| event.latency_ms).sum(),
                     spawn: node
