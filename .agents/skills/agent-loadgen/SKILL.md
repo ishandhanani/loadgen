@@ -1,6 +1,6 @@
 ---
 name: agent-loadgen
-description: Generate realistic LLM traffic with agent-loadgen and run it against an OpenAI-compatible or Dynamo endpoint. Use to turn a description of a company's or fleet's traffic (coding agents, batch evals, or plain API calls) into profiles, check them, run them, and read the results, or to replay a captured Dynamo request trace.
+description: Generate realistic LLM traffic with agent-loadgen and run it against an OpenAI-compatible or Dynamo endpoint. Use to turn a description of a company's or fleet's traffic (coding agents, batch evals, or plain API calls) into profiles, check them, run them, and read the results.
 ---
 
 # agent-loadgen
@@ -96,18 +96,6 @@ max_depth = 0
 ## Compressing time
 
 To play a long schedule faster at the same load level, shrink `bucket_minutes`: 7.5-minute buckets play eight hourly buckets in one hour. Multiply the rates too if the run must send the whole period's requests. Say which you did.
-
-## Replaying a captured trace
-
-To resend real traffic instead of generating it, use a Dynamo request trace (`dynamo.request.trace.v1`, with `agent_context` on every request):
-
-```bash
-target/release/agent-loadgen inspect trace.jsonl.gz --tokenizer <tokenizer>
-target/release/agent-loadgen replay trace.jsonl.gz --headers codex --model <model> \
-  --target http://<frontend>:8000 --tokenizer <tokenizer> --output runs/replay
-```
-
-`--session-id` replays one session; `--time-scale` divides recorded offsets and delays. See `docs/replay.md`.
 
 ## Limits
 

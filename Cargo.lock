@@ -16,7 +16,6 @@ dependencies = [
  "agent-loadgen-generate",
  "agent-loadgen-replay",
  "agent-loadgen-serve",
- "agent-loadgen-trace",
  "anyhow",
  "clap",
  "serde",
@@ -54,7 +53,6 @@ version = "0.1.0"
 dependencies = [
  "agent-loadgen-core",
  "agent-loadgen-generate",
- "agent-loadgen-trace",
  "anyhow",
  "axum",
  "futures-util",
@@ -90,20 +88,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "agent-loadgen-trace"
-version = "0.1.0"
-dependencies = [
- "agent-loadgen-core",
- "anyhow",
- "flate2",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
 ]
 
 [[package]]

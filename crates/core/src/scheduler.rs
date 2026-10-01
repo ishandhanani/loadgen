@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Stable ready-time scheduling shared by recorded and generated workloads.
+//! Stable ready-time scheduling for generated workloads.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;

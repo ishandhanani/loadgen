@@ -31,13 +31,6 @@ impl TokenArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct TraceSelectionArgs {
-    /// Replay one session in isolation.
-    #[arg(long)]
-    pub session_id: Option<String>,
-}
-
-#[derive(Debug, Args)]
 pub struct RunArgs {
     /// Stop sending after this many minutes, let in-flight requests finish, and
     /// report the requests that were sent.
@@ -60,68 +53,6 @@ impl RunArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Validate and summarize an agentic trace and its causal graph.
-    Inspect {
-        /// Raw or wrapped Dynamo request trace files.
-        #[arg(required = true)]
-        trace: Vec<PathBuf>,
-
-        #[command(flatten)]
-        selection: TraceSelectionArgs,
-
-        #[command(flatten)]
-        tokens: TokenArgs,
-    },
-
-    /// Replay a trace against a live Dynamo frontend.
-    Replay {
-        /// Raw or wrapped Dynamo request trace files.
-        #[arg(required = true)]
-        trace: Vec<PathBuf>,
-
-        /// Coding-agent harness whose request headers to send.
-        #[arg(long = "headers", value_enum)]
-        header_dialect: HeaderDialect,
-
-        /// Also mark each session's last request with `x-dynamo-session-final: true`.
-        /// No harness sends this Dynamo extension; enable it only for deployments that consume it.
-        #[arg(long)]
-        dynamo_session_final: bool,
-
-        /// Model name sent to Dynamo.
-        #[arg(long)]
-        model: String,
-
-        /// Dynamo base URL or full Chat Completions URL.
-        #[arg(long)]
-        target: String,
-
-        /// Output directory for run.json and requests.jsonl.
-        #[arg(long)]
-        output: PathBuf,
-
-        #[command(flatten)]
-        selection: TraceSelectionArgs,
-
-        #[command(flatten)]
-        tokens: TokenArgs,
-
-        /// Per-request HTTP timeout.
-        #[arg(long, default_value_t = 600)]
-        timeout_seconds: u64,
-
-        /// Divide root offsets and dependency delays by this value.
-        #[arg(long, default_value_t = 1.0)]
-        time_scale: f64,
-
-        /// Add a static target header as NAME=VALUE. Repeat the flag for more headers.
-        #[arg(long = "header")]
-        static_headers: Vec<String>,
-
-        #[command(flatten)]
-        run: RunArgs,
-    },
-
     /// Summarize a profile's traffic without sending it.
     Plan {
         /// Versioned TOML generator config.

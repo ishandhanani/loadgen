@@ -7,4 +7,4 @@ mod contracts;
 pub mod scheduler;
 
 pub use agent::HeaderDialect;
-pub use contracts::{AgentContext, Percentiles, TraceManifest, TraceRequest, percentiles};
+pub use contracts::{AgentContext, Percentiles, TraceRequest, percentiles};

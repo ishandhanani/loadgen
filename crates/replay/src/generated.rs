@@ -12,13 +12,11 @@ use super::causal::{CausalWorkload, Chunk, ChunkNode, execute_causally};
 use super::request::{
     connect, in_flight_limit, normalize_target, prepare_request, validate_options,
 };
-use super::{PreparedRequest, ReplayOptions, RequestExecution, RunSummary, TrafficKind};
+use super::{PreparedRequest, ReplayOptions, RequestExecution, RunPlan, RunSummary};
 use crate::headers::{HeaderInput, Headers, render, stable_uuid};
 use crate::token_shape::TokenDictionary;
-use agent_loadgen_core::{AgentContext, HeaderDialect, TraceManifest};
-use agent_loadgen_generate::scenario::{
-    GeneratedSessionTopology, PlannedTree, ResolvedLoad, TreePlanner,
-};
+use agent_loadgen_core::{AgentContext, HeaderDialect};
+use agent_loadgen_generate::scenario::{PlannedTree, ResolvedLoad, TreePlanner};
 
 /// Run a generated load, planning each top-level session tree when it starts.
 pub async fn run_generated(
@@ -56,49 +54,37 @@ pub async fn run_generated(
         totals: Totals::default(),
     };
     let execution = execute_causally(&mut workload, client, &options, in_flight_limit).await?;
-    let config = planner.config();
     let totals = workload.totals;
-    let source = TraceManifest {
-        request_count: totals.requests,
-        session_count: totals.sessions,
-        requests_with_agent_context: totals.requests,
-        first_request_received_ms: 0,
-        last_request_received_ms: totals.last_start_ms,
-        duration_ms: config.load.duration_ms().unwrap_or(totals.last_start_ms),
-        input_tokens: totals.input_tokens,
-        output_tokens: totals.output_tokens,
-        distinct_sequence_hashes: 0,
-        trace_block_size: config.block_size,
-        source_digest_sha256: planner.profile_digest_sha256().to_string(),
-    };
-    let mut summary = summarize(
-        SummaryIdentity {
-            traffic_kind: TrafficKind::SyntheticKvShape,
-            run_id,
-            target: &target,
-            http_version,
-            in_flight_limit,
-            peak_in_flight: execution.peak_in_flight,
-        },
-        &source,
-        &token_manifest,
-        &options,
-        &execution.accumulator,
-        execution.elapsed,
-        execution.stopped_early,
-    );
-    summary.session_topology = Some(GeneratedSessionTopology {
-        configured_top_level_sessions: totals.trees,
-        configured_concurrent_sessions: match &config.load {
+    let plan = RunPlan {
+        profile_digest_sha256: planner.profile_digest_sha256().to_string(),
+        top_level_sessions: totals.trees,
+        concurrent_sessions: match &planner.config().load {
             ResolvedLoad::Streams {
                 concurrent_sessions,
                 ..
             } => Some(*concurrent_sessions),
             ResolvedLoad::Arrivals { .. } => None,
         },
-        generated_subagent_sessions: totals.sessions - totals.trees,
-        total_protocol_sessions: totals.sessions,
-    });
+        subagent_sessions: totals.sessions - totals.trees,
+        requests: totals.requests,
+        input_tokens: totals.input_tokens,
+        output_tokens: totals.output_tokens,
+    };
+    let summary = summarize(
+        SummaryIdentity {
+            run_id,
+            target: &target,
+            http_version,
+            in_flight_limit,
+            peak_in_flight: execution.peak_in_flight,
+        },
+        plan,
+        &token_manifest,
+        &options,
+        &execution.accumulator,
+        execution.elapsed,
+        execution.stopped_early,
+    );
     write_json(&options.output_dir.join("run.json"), &summary)?;
     write_timeline(
         &options.output_dir.join("timeline.csv"),
@@ -114,7 +100,6 @@ struct Totals {
     requests: usize,
     input_tokens: u64,
     output_tokens: u64,
-    last_start_ms: u64,
 }
 
 struct GeneratedWorkload<'a> {
@@ -162,7 +147,6 @@ impl CausalWorkload for GeneratedWorkload<'_> {
         };
         if start_ms.is_some() {
             self.next_scheduled += 1;
-            self.totals.last_start_ms = self.totals.last_start_ms.max(start_ms.unwrap_or(0));
         }
         Ok(start_ms.map(|start_ms| (start_ms, index)))
     }

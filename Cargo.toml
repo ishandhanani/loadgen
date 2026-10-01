@@ -2,7 +2,6 @@
 members = [
     ".",
     "crates/core",
-    "crates/trace",
     "crates/generate",
     "crates/replay",
     "crates/serve",
@@ -21,7 +20,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "KV-faithful trace replay and generated coding-agent load for Dynamo"
+description = "Generated coding-agent load with faithful KV shape and timing for Dynamo"
 readme = "README.md"
 repository.workspace = true
 publish = false
@@ -31,7 +30,6 @@ agent-loadgen-core = { version = "0.1.0", path = "crates/core", features = ["cla
 agent-loadgen-generate = { version = "0.1.0", path = "crates/generate" }
 agent-loadgen-replay = { version = "0.1.0", path = "crates/replay" }
 agent-loadgen-serve = { version = "0.1.0", path = "crates/serve" }
-agent-loadgen-trace = { version = "0.1.0", path = "crates/trace" }
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 serde = "1"

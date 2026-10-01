@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// A dialect sends only the headers its harness sends; Dynamo derives session
 /// identity from them. The dialect never changes traffic shape; shape comes
-/// from the trace or profile.
+/// from the profile.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "kebab-case")]

@@ -10,8 +10,7 @@
 # rate that each request rate implies.
 #
 # To see the whole day in less time without changing the load level, shrink
-# bucket_minutes (7.5 plays the day in one hour). `--time-scale` instead
-# compresses every client delay and multiplies the arrival rate.
+# bucket_minutes (7.5 plays the day in one hour).
 
 schema_version = 5
 seed = 42

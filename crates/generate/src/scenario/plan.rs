@@ -778,7 +778,6 @@ impl TreeBuilder<'_> {
                 parent_session_id: state.parent_session_id.clone(),
                 compaction: spec.compaction,
                 input_trigger: Some(spec.input_trigger.to_string()),
-                agent_headers: Default::default(),
             }),
         };
         self.nodes.push(GeneratedNode {

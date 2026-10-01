@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -13,9 +11,6 @@ pub struct AgentContext {
     pub compaction: Option<serde_json::Value>,
     #[serde(default)]
     pub input_trigger: Option<String>,
-    /// Coding-agent headers Dynamo recorded verbatim from the original request.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub agent_headers: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -30,21 +25,6 @@ pub struct TraceRequest {
     pub trace_block_size: usize,
     pub input_sequence_hashes: Vec<u64>,
     pub agent_context: Option<AgentContext>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TraceManifest {
-    pub request_count: usize,
-    pub session_count: usize,
-    pub requests_with_agent_context: usize,
-    pub first_request_received_ms: u64,
-    pub last_request_received_ms: u64,
-    pub duration_ms: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub distinct_sequence_hashes: usize,
-    pub trace_block_size: usize,
-    pub source_digest_sha256: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

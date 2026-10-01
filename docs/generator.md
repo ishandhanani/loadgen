@@ -194,7 +194,7 @@ These are top-level session streams. Subagents are generated within those sessio
 
 | Field | Default | Why |
 |---|---:|---|
-| `tokens.block_size` | `16` | Matches the common Dynamo replay block granularity and keeps prefix topology compact. Override it to match the target trace or engine contract. |
+| `tokens.block_size` | `16` | Matches the common Dynamo KV block granularity and keeps prefix topology compact. Override it to match the target engine. |
 | `tokens.system_prefix_tokens` | `fixed(7000)` | A neutral harness instruction surface. Measure the deployed harness version and override; Claude Code and Codex surfaces have been observed near `12000` and `11000`. |
 | `tokens.tool_catalog_tokens` | `fixed(11000)` | A neutral tool-schema surface. Observed harness catalogs range from roughly `9000` (Codex) to `14000` (Claude Code). |
 | `tokens.repository_tokens` | `log_normal(2000, 0.7, 256, 12000)` | Creates a root-tree prefix shared by a parent and all descendants, with a long tail for larger repository context. |

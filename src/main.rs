@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use agent_loadgen_generate::scenario::{GeneratorConfig, PlanSummary, TreePlanner};
 use agent_loadgen_replay::token_shape::TokenDictionary;
-use agent_loadgen_replay::{ReplayOptions, run_agentic_replay, run_generated};
-use agent_loadgen_trace::load_agentic_trace;
+use agent_loadgen_replay::{ReplayOptions, run_generated};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 
@@ -17,67 +16,6 @@ use cli::{Cli, Command};
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Inspect {
-            trace,
-            selection,
-            tokens,
-        } => {
-            let trace = load_agentic_trace(&trace, selection.session_id.as_deref())?;
-            let dictionary = TokenDictionary::new(
-                trace.manifest.trace_block_size,
-                trace.manifest.distinct_sequence_hashes,
-                tokens.load()?,
-            )?;
-            let output = serde_json::json!({
-                "fidelity": "agentic-causal",
-                "source": trace.manifest,
-                "root_requests": trace.root_request_count(),
-                "dependency_edges": trace.dependency_edge_count(),
-                "token_dictionary": dictionary.manifest()
-            });
-            println!("{}", serde_json::to_string_pretty(&output)?);
-        }
-        Command::Replay {
-            trace,
-            header_dialect,
-            dynamo_session_final,
-            model,
-            target,
-            output,
-            selection,
-            tokens,
-            timeout_seconds,
-            time_scale,
-            static_headers,
-            run,
-        } => {
-            let trace = load_agentic_trace(&trace, selection.session_id.as_deref())?;
-            let dictionary = TokenDictionary::new(
-                trace.manifest.trace_block_size,
-                trace.manifest.distinct_sequence_hashes,
-                tokens.load()?,
-            )?;
-            let summary = run_agentic_replay(
-                trace,
-                dictionary,
-                ReplayOptions {
-                    header_dialect,
-                    dynamo_session_final,
-                    model,
-                    target,
-                    output_dir: output,
-                    timeout: Duration::from_secs(timeout_seconds),
-                    time_scale,
-                    static_headers: parse_headers(static_headers)?,
-                    stop_after: run.stop_after()?,
-                },
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&summary)?);
-            if !summary.passed {
-                bail!("some replayed requests failed or missed their recorded output length");
-            }
-        }
         Command::Plan { config, output } => {
             let planner = TreePlanner::new(GeneratorConfig::load(&config)?.resolve()?)?;
             let output = write_plan_artifacts(&planner, &output)?;
@@ -97,7 +35,7 @@ async fn main() -> Result<()> {
         } => {
             let planner = TreePlanner::new(GeneratorConfig::load(&config)?.resolve()?)?;
             write_plan_artifacts(&planner, &output)?;
-            let dictionary = TokenDictionary::new(planner.config().block_size, 0, tokens.load()?)?;
+            let dictionary = TokenDictionary::new(planner.config().block_size, tokens.load()?)?;
             let summary = run_generated(
                 &planner,
                 dictionary,
@@ -108,7 +46,6 @@ async fn main() -> Result<()> {
                     target,
                     output_dir: output,
                     timeout: Duration::from_secs(timeout_seconds),
-                    time_scale: 1.0,
                     static_headers: parse_headers(static_headers)?,
                     stop_after: run.stop_after()?,
                 },

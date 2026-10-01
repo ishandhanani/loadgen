@@ -12,12 +12,9 @@ use anyhow::{Context, Result, bail};
 use hdrhistogram::Histogram;
 use serde::Serialize;
 
-use super::{
-    Percentiles, Performance, ReplayOptions, RequestResult, RunSummary, TrafficKind, millis,
-};
+use super::{Percentiles, Performance, ReplayOptions, RequestResult, RunPlan, RunSummary, millis};
 use crate::clock::TIMER_BACKEND;
 use crate::token_shape::TokenDictionaryManifest;
-use agent_loadgen_core::TraceManifest;
 use agent_loadgen_generate::scenario::CompactionExpectedEffect;
 
 /// Width of each `timeline.csv` row.
@@ -314,7 +311,6 @@ fn histogram_percentiles(histogram: &Histogram<u64>) -> Percentiles {
 }
 
 pub(super) struct SummaryIdentity<'a> {
-    pub(super) traffic_kind: TrafficKind,
     pub(super) run_id: String,
     pub(super) target: &'a str,
     pub(super) http_version: &'static str,
@@ -324,7 +320,7 @@ pub(super) struct SummaryIdentity<'a> {
 
 pub(super) fn summarize(
     identity: SummaryIdentity<'_>,
-    source: &TraceManifest,
+    plan: RunPlan,
     dictionary: &TokenDictionaryManifest,
     options: &ReplayOptions,
     accumulator: &RunAccumulator,
@@ -335,7 +331,7 @@ pub(super) fn summarize(
     let dispatch_lag_ms = histogram_percentiles(&accumulator.dispatch_lag_us);
     let local_admission_lag_ms = histogram_percentiles(&accumulator.local_admission_lag_us);
     // A run stopped by `stop_after` is judged on the requests it sent.
-    let passed = (stopped_early || accumulator.request_count == source.request_count)
+    let passed = (stopped_early || accumulator.request_count == plan.requests)
         && accumulator.succeeded == accumulator.request_count
         && accumulator.output_length_matches == accumulator.budgeted_requests
         && accumulator.missing_output_usage == 0
@@ -346,7 +342,6 @@ pub(super) fn summarize(
         dynamo_session_final: options.dynamo_session_final,
         model: options.model.clone(),
         target: identity.target.to_string(),
-        time_scale: options.time_scale,
         in_flight_limit: identity.in_flight_limit,
         peak_in_flight: identity.peak_in_flight,
         http_version: identity.http_version,
@@ -357,10 +352,7 @@ pub(super) fn summarize(
             .map(|(name, _)| name.clone())
             .collect(),
         protocol_surface: "chat_completions",
-        traffic_kind: identity.traffic_kind,
-        scheduling_model: identity.traffic_kind.scheduling_model(),
-        source: source.clone(),
-        session_topology: None,
+        plan,
         token_dictionary: dictionary.clone(),
         request_count: accumulator.request_count,
         budgeted_requests: accumulator.budgeted_requests,

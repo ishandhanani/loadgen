@@ -57,11 +57,8 @@ pub(crate) struct HeaderInput<'a> {
     pub(crate) launched_tools: Vec<(&'a str, u64)>,
 }
 
-/// Render every request's harness headers.
-///
-/// A request whose captured `agent_headers` already contain this harness's
-/// headers replays them verbatim. Otherwise the headers are derived from
-/// session lineage, compaction metadata, input triggers, and tool timings.
+/// Render every request's harness headers from session lineage, compaction
+/// metadata, input triggers, and tool timings.
 pub(crate) fn render(dialect: HeaderDialect, requests: &[HeaderInput<'_>]) -> Result<Vec<Headers>> {
     let lineage = Lineage::new(requests)?;
     let mut sessions: HashMap<&str, SessionState> = HashMap::new();
@@ -116,14 +113,9 @@ pub(crate) fn render(dialect: HeaderDialect, requests: &[HeaderInput<'_>]) -> Re
     requests
         .iter()
         .zip(&facts)
-        .map(|(request, facts)| {
-            if let Some(captured) = captured_headers(dialect, request.context) {
-                return Ok(captured);
-            }
-            match dialect {
-                HeaderDialect::ClaudeCode => claude(request.context, facts, &lineage),
-                HeaderDialect::Codex => Ok(codex(request.context, facts, &lineage)),
-            }
+        .map(|(request, facts)| match dialect {
+            HeaderDialect::ClaudeCode => claude(request.context, facts, &lineage),
+            HeaderDialect::Codex => Ok(codex(request.context, facts, &lineage)),
         })
         .collect()
 }
@@ -172,24 +164,6 @@ fn compaction_trigger(context: &AgentContext) -> Option<&'static str> {
         "reactive" => Some("reactive"),
         _ => None,
     }
-}
-
-fn captured_headers(dialect: HeaderDialect, context: &AgentContext) -> Option<Headers> {
-    let owned = |name: &str| match dialect {
-        HeaderDialect::ClaudeCode => name.starts_with("x-claude-code-"),
-        HeaderDialect::Codex => {
-            name.starts_with("x-codex-")
-                || name.starts_with("x-openai-")
-                || matches!(name, "thread-id" | "session-id")
-        }
-    };
-    let headers: Headers = context
-        .agent_headers
-        .iter()
-        .filter(|(name, _)| owned(name))
-        .flat_map(|(name, values)| values.iter().map(|value| (name.clone(), value.clone())))
-        .collect();
-    (!headers.is_empty()).then_some(headers)
 }
 
 fn claude(context: &AgentContext, facts: &RequestFacts, lineage: &Lineage<'_>) -> Result<Headers> {
@@ -262,7 +236,7 @@ fn codex(context: &AgentContext, facts: &RequestFacts, lineage: &Lineage<'_>) ->
     headers
 }
 
-/// Keep only Codex's compaction vocabulary; captured traces may carry it verbatim.
+/// Keep only Codex's compaction vocabulary.
 fn codex_compaction(compaction: &Value) -> Value {
     let mut fields = Map::new();
     for key in ["trigger", "reason", "implementation", "phase", "strategy"] {
@@ -383,7 +357,6 @@ impl<'a> Lineage<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use super::*;
 
@@ -393,7 +366,6 @@ mod tests {
             parent_session_id: parent.map(str::to_string),
             compaction: None,
             input_trigger: Some(trigger.to_string()),
-            agent_headers: BTreeMap::new(),
         }
     }
 
@@ -587,42 +559,6 @@ mod tests {
         );
         assert!(tool_durations(&[("x".repeat(4095), 1)]).is_none());
         assert!(tool_durations(&[]).is_none());
-    }
-
-    #[test]
-    fn captured_harness_headers_replay_verbatim() {
-        let mut captured = context("child", Some("root"), "tool_result");
-        captured.agent_headers = BTreeMap::from([
-            (
-                "x-claude-code-session-id".to_string(),
-                vec!["root".to_string()],
-            ),
-            (
-                "x-claude-code-agent-id".to_string(),
-                vec!["child".to_string()],
-            ),
-            (
-                "x-claude-code-future".to_string(),
-                vec!["a".to_string(), "b".to_string()],
-            ),
-            ("thread-id".to_string(), vec!["thread".to_string()]),
-        ]);
-        let contexts = [context("root", None, "user_message"), captured];
-        let dependencies = [vec![], vec![0]];
-        let requests = inputs(&contexts, &dependencies);
-        let claude = render(HeaderDialect::ClaudeCode, &requests).unwrap();
-        assert_eq!(
-            claude[1],
-            vec![
-                header("x-claude-code-agent-id", "child"),
-                header("x-claude-code-future", "a"),
-                header("x-claude-code-future", "b"),
-                header("x-claude-code-session-id", "root"),
-            ]
-        );
-        let codex = render(HeaderDialect::Codex, &requests).unwrap();
-        assert_eq!(codex[1], vec![header("thread-id", "thread")]);
-        assert_eq!(value(&codex[0], "thread-id"), Some("root"));
     }
 
     #[test]

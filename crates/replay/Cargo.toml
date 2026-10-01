@@ -4,14 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Causal replay runtime and transport for agent-loadgen"
+description = "Causal runtime and transport for agent-loadgen's generated load"
 repository.workspace = true
 publish = false
 
 [dependencies]
 agent-loadgen-core = { version = "0.1.0", path = "../core" }
 agent-loadgen-generate = { version = "0.1.0", path = "../generate" }
-agent-loadgen-trace = { version = "0.1.0", path = "../trace" }
 anyhow = "1"
 futures-util = "0.3"
 hdrhistogram = "7"
