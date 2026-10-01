@@ -74,7 +74,7 @@ agent-loadgen plan --config customer.toml --output artifacts/customer-plan
 - `expected_totals`: requests and tokens over the whole plan.
 - `arrivals.buckets`: per bucket, the configured rate, the session rate, the sampled session starts, and the expected request rate.
 
-Adjust fields and plan again until the summary matches. Plans that fit `limits.max_nodes` also write `scenario.json` and `plan.dot`, the full request graph.
+Adjust fields and plan again until the summary matches.
 
 ## 4. Run it against a deployment
 

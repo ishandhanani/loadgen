@@ -25,7 +25,7 @@ Logs go to stderr through `tracing`; `RUST_LOG` overrides the default `info` lev
 
 ## Endpoints
 
-All responses are JSON except the two file downloads. Errors are `{"error": "..."}` with 400 (bad input), 404 (unknown session, job, or artifact), 422 (invalid profile), 429 (per-client job cap), or 500.
+All responses are JSON except the bundle download. Errors are `{"error": "..."}` with 400 (bad input), 404 (unknown session, job, or artifact), 422 (invalid profile), 429 (per-client job cap), or 500.
 
 | Method and path | Purpose |
 |---|---|
@@ -34,8 +34,6 @@ All responses are JSON except the two file downloads. Errors are `{"error": "...
 | `GET /jobs/{id}` | `state.json` fields plus `log` (last 4000 characters of `log.txt`). |
 | `GET /jobs/{id}/bundle` | `bundle.jsonl.gz` as `application/gzip` with `Content-Disposition: attachment; filename="session-<sid>.jsonl.gz"`. |
 | `POST /plan` | Body `{"toml": "<profile>"}` (at most 64 000 bytes). Plans synchronously and returns the preview described below. |
-| `GET /jobs/{id}/scenario.json` | The planned `scenario.json`. Served with `Content-Encoding: gzip` when stored compressed; browsers and `curl --compressed` decode it transparently. |
-| `GET /jobs/{id}/plan.svg` | Graphviz rendering when `dot` was available and the scenario had at most 500 nodes; otherwise 404. |
 | `GET /metrics` | Prometheus text exposition (`text/plain; version=0.0.4`). See [Metrics](#metrics). |
 
 ## Replay bundle jobs
@@ -63,34 +61,24 @@ A bundle job turns one dashboard session (optionally with its subagent tree) int
 
 ## Plan previews
 
-`POST /plan` parses the TOML with the same strict path as `agent-loadgen plan` (`GeneratorConfig::parse` -> `resolve` -> `GeneratedScenario::generate`). Invalid profiles return 422 `{"job_id","error"}` with the generator's message, including the schema 4 migration hint.
+`POST /plan` parses the TOML with the same strict path as `agent-loadgen plan` and returns its `plan-summary.json` with swimlane data for the first top-level trees. Invalid profiles return 422 `{"error"}` with the generator's message, including the schema 4 migration hint.
 
 Response:
 
 ```json
 {
-  "job_id": "p-<12 hex>",
-  "summary": {
-    "sessions": 0, "nodes": 0, "top_level_sessions": 0, "compaction_operations": 0,
-    "total_input_tokens": 0, "total_output_budget_tokens": 0,
-    "tool_parallelism": {"tool_phases": 0, "...": 0}, "scenario_digest": "<sha256>"
-  },
+  "summary": {"top_level_sessions": 4, "per_tree": {"...": {}}, "per_request": {"...": {}}, "...": null},
   "timeline": {
+    "trees": 4,
     "sessions": [{"id": "...", "parent": null, "depth": 0}],
     "nodes": [{"s": 0, "o": 0, "a": "tool", "in": 0, "out": 0, "tools": 0, "wait": 0, "spawn": [], "compaction": false}]
   },
-  "has_svg": false,
-  "scenario_bytes": 0,
   "command": "agent-loadgen generate --config scenario.toml \\\n  --headers claude-code ...",
   "elapsed_ms": 0
 }
 ```
 
-`timeline.nodes[].a` uses the action names from `scenario.json` (`text`, `tool`, `parallel_tools`, `subagent`, `swarm`, `compaction_attempt`, `complete`); `out` is the output budget when present, else the request's output tokens; `wait` is the summed tool latency; `spawn` lists spawned session indices.
-
-Artifacts under the job directory: `config.toml`, `plan.dot` (always), `plan.svg` (Graphviz on `PATH` and at most 500 nodes), `scenario.json.gz` (when the pretty-printed scenario is at most 64 MiB; larger scenarios are regenerated from `config.toml` on the first `GET`), and `plan.json` (the response, used by the cache).
-
-Plan cache: identical TOML text (by SHA-256) returns the stored response with the original `job_id`.
+`summary` is exactly the `plan-summary.json` that `agent-loadgen plan` writes; see [Describe a workload](workloads.md). `timeline` draws whole trees, from the first, until it holds at least 2,000 requests. `timeline.nodes[].a` is the planned action (`text`, `tool`, `parallel_tools`, `subagent`, `swarm`, `compaction_attempt`, `complete`); `out` is the output budget when present, else the request's output tokens; `wait` is the summed tool latency; `spawn` lists spawned session indices.
 
 ## Metrics
 
@@ -175,7 +163,7 @@ handle_path /api/loadgen/* {
 |---|---|
 | `crates/serve/src/api.rs` | Routes, request validation, JSON errors, file streaming. |
 | `crates/serve/src/bundle.rs` | Session resolution, shard scan, merge and dedupe, inspect, gzip, job runner. |
-| `crates/serve/src/plan.rs` | In-process planning, summary and timeline, artifact storage. |
+| `crates/serve/src/plan.rs` | In-process planning, plan summary, and timeline. |
 | `crates/serve/src/shards.rs` | `ShardSource` trait with the S3 and local-directory implementations, shard listing. |
 | `crates/serve/src/jobs.rs` | `state.json` schema, atomic writes, job index (in-flight, caches, queue, per-client counts), pruning. |
 | `crates/serve/src/metrics.rs` | Prometheus registry, HTTP middleware, client activity tracking, `/metrics` handler. |

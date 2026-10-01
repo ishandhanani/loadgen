@@ -2,9 +2,7 @@
 
 use std::time::Duration;
 
-use agent_loadgen_generate::scenario::{
-    GeneratorConfig, PlanSummary, TreePlanner, write_plan_graph,
-};
+use agent_loadgen_generate::scenario::{GeneratorConfig, PlanSummary, TreePlanner};
 use agent_loadgen_replay::token_shape::TokenDictionary;
 use agent_loadgen_replay::{ReplayOptions, run_agentic_replay, run_generated};
 use agent_loadgen_trace::load_agentic_trace;
@@ -153,8 +151,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Write plan-summary.json and, when the plan fits one graph, scenario.json,
-/// plan.dot, and plan.svg.
+/// Write plan-summary.json.
 fn write_plan_artifacts(
     planner: &TreePlanner,
     output: &std::path::Path,
@@ -164,27 +161,10 @@ fn write_plan_artifacts(
     let summary = PlanSummary::sample(planner)?;
     let summary_path = output.join("plan-summary.json");
     write_pretty_json(&summary_path, &summary)?;
-    let mut result = serde_json::json!({
+    Ok(serde_json::json!({
         "summary": summary,
         "summary_path": summary_path,
-    });
-    // Only finite plans within limits.max_nodes are joined into one graph.
-    let fits = planner.tree_count().is_some_and(|trees| {
-        summary.per_tree.requests.mean * trees as f64 <= planner.config().max_nodes as f64
-    });
-    if fits && let Ok(scenario) = planner.materialize() {
-        let scenario_path = output.join("scenario.json");
-        write_pretty_json(&scenario_path, &scenario)?;
-        let graph = write_plan_graph(output, &scenario)?;
-        result["scenario_digest_sha256"] = serde_json::json!(scenario.scenario_digest_sha256);
-        result["requests"] = serde_json::json!(scenario.nodes.len());
-        result["session_topology"] = serde_json::json!(scenario.session_topology);
-        result["tool_parallelism"] = serde_json::json!(scenario.tool_parallelism);
-        result["scenario_path"] = serde_json::json!(scenario_path);
-        result["graph_path"] = serde_json::json!(graph.dot_path);
-        result["graphviz_svg_path"] = serde_json::json!(graph.svg_path);
-    }
-    Ok(result)
+    }))
 }
 
 fn write_pretty_json(path: &std::path::Path, value: &impl serde::Serialize) -> Result<()> {

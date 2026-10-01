@@ -42,7 +42,6 @@ If the build fails with `could not execute process 'sccache ...'`, prefix it wit
    - `expected_totals`: requests and tokens over the whole plan.
    - `top_level_sessions`, `duration_minutes`.
 
-   Small plans also get `scenario.json` and `plan.dot`/`plan.svg`, the full request graph.
 5. **Run it** (only when asked to send traffic):
 
    ```bash

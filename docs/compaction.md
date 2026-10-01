@@ -63,13 +63,9 @@ Dynamo request traces record these headers verbatim in `agent_context.agent_head
 
 ## Artifacts
 
-`scenario.json` records:
+Each planned tree records `compaction_operations` with the stable operation ID, attempt nodes, applied attempt, and expected apply count, and each attempt node records its phase, attempt number, expected effect, and abort delay. A node's `window_epoch` increases after a successful logical compaction.
 
-- `compaction_operations` with the stable operation ID, attempt nodes, applied attempt, and expected apply count.
-- Per-node `compaction_attempt` metadata with phase, attempt number, expected effect, and abort delay.
-- Per-node `window_epoch`, which increases after a successful logical compaction.
-
-`requests.jsonl` records the same operation and attempt identity with the observed HTTP result.
+`requests.jsonl` records each attempt's operation ID, phase, attempt number, and expected effect with the observed HTTP result.
 
 ## Proof boundary
 

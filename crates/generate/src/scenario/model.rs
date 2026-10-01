@@ -2,22 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::config::ResolvedGeneratorConfig;
-use agent_loadgen_core::{TraceManifest, TraceRequest};
-
-#[derive(Debug, Clone, Serialize)]
-pub struct GeneratedScenario {
-    pub schema_version: u32,
-    pub profile_digest_sha256: String,
-    pub scenario_digest_sha256: String,
-    pub config: ResolvedGeneratorConfig,
-    pub session_topology: GeneratedSessionTopology,
-    pub sessions: Vec<GeneratedSession>,
-    pub nodes: Vec<GeneratedNode>,
-    pub tool_parallelism: GeneratedToolParallelism,
-    pub compaction_operations: Vec<GeneratedCompactionOperation>,
-    pub trace_manifest: TraceManifest,
-}
+use agent_loadgen_core::TraceRequest;
 
 /// The planned relationship between user-configured top-level streams and generated subagents.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -110,19 +95,4 @@ pub struct GeneratedToolEvent {
     pub result_tokens: u64,
     pub failed: bool,
     pub retried: bool,
-}
-
-/// Parallelism realized by the sampled tool phases in this scenario.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct GeneratedToolParallelism {
-    pub tool_phases: usize,
-    pub parallel_tool_phases: usize,
-    pub tool_calls: usize,
-    pub parallel_tool_calls: usize,
-    pub parallel_call_fraction: f64,
-    pub tool_work_ms: u64,
-    pub tool_wall_ms: u64,
-    pub parallel_wall_ms: u64,
-    pub parallel_wall_time_fraction: f64,
-    pub work_to_wall_ratio: f64,
 }

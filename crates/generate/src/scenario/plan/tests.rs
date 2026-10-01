@@ -22,68 +22,77 @@ fn config() -> ResolvedGeneratorConfig {
     config
 }
 
-#[test]
-fn generation_is_seed_deterministic() {
-    let first = GeneratedScenario::generate(config()).unwrap();
-    let second = GeneratedScenario::generate(config()).unwrap();
-    assert_eq!(first.scenario_digest_sha256, second.scenario_digest_sha256);
-    assert_eq!(first.nodes.len(), second.nodes.len());
+/// Plan every top-level tree of a finite profile.
+fn trees(config: ResolvedGeneratorConfig) -> Vec<PlannedTree> {
+    let planner = TreePlanner::new(config).unwrap();
+    (0..planner.tree_count().unwrap())
+        .map(|index| planner.plan_tree(index).unwrap())
+        .collect()
+}
+
+fn tree(config: ResolvedGeneratorConfig) -> PlannedTree {
+    trees(config).remove(0)
 }
 
 #[test]
-fn graph_dependencies_only_point_backward() {
-    let scenario = GeneratedScenario::generate(config()).unwrap();
-    assert!(scenario.nodes.iter().enumerate().all(|(ordinal, node)| {
-        node.dependencies
-            .iter()
-            .all(|dependency| *dependency < ordinal)
-    }));
-    assert!(scenario.nodes.iter().any(|node| node.action == "tool"));
-    assert!(
-        scenario
-            .nodes
-            .iter()
-            .filter(|node| node.action == "tool")
-            .all(|node| !node.tool_events.is_empty())
+fn generation_is_seed_deterministic() {
+    assert_eq!(
+        serde_json::to_value(trees(config())).unwrap(),
+        serde_json::to_value(trees(config())).unwrap()
     );
 }
 
 #[test]
+fn graph_dependencies_only_point_backward() {
+    let trees = trees(config());
+    for tree in &trees {
+        assert!(tree.nodes.iter().enumerate().all(|(ordinal, node)| {
+            node.dependencies
+                .iter()
+                .all(|dependency| *dependency < ordinal)
+        }));
+    }
+    let nodes = trees.iter().flat_map(|tree| &tree.nodes);
+    let tools = nodes
+        .filter(|node| node.action == "tool")
+        .collect::<Vec<_>>();
+    assert!(!tools.is_empty());
+    assert!(tools.iter().all(|node| !node.tool_events.is_empty()));
+}
+
+#[test]
 fn every_session_marks_exactly_its_last_request_final() {
-    let scenario = GeneratedScenario::generate(config()).unwrap();
-    assert!(scenario.sessions.len() > 1);
-    for session in &scenario.sessions {
-        let ordinals = scenario
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, node)| {
-                node.request.agent_context.as_ref().unwrap().session_id == session.session_id
-            })
-            .map(|(ordinal, _)| ordinal)
-            .collect::<Vec<_>>();
-        let finals = ordinals
-            .iter()
-            .filter(|ordinal| scenario.nodes[**ordinal].session_final)
-            .copied()
-            .collect::<Vec<_>>();
-        assert_eq!(finals, vec![*ordinals.last().unwrap()]);
-        assert_eq!(scenario.nodes[finals[0]].action, "complete");
+    let trees = trees(config());
+    assert!(trees.iter().any(|tree| tree.sessions.len() > 1));
+    for tree in trees {
+        for session in &tree.sessions {
+            let ordinals = tree
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| {
+                    node.request.agent_context.as_ref().unwrap().session_id == session.session_id
+                })
+                .map(|(ordinal, _)| ordinal)
+                .collect::<Vec<_>>();
+            let finals = ordinals
+                .iter()
+                .filter(|ordinal| tree.nodes[**ordinal].session_final)
+                .copied()
+                .collect::<Vec<_>>();
+            assert_eq!(finals, vec![*ordinals.last().unwrap()]);
+            assert_eq!(tree.nodes[finals[0]].action, "complete");
+        }
     }
 }
 
 #[test]
 fn profile_preserves_global_prefix_sharing() {
-    let scenario = GeneratedScenario::generate(config()).unwrap();
-    let roots = scenario
-        .nodes
-        .iter()
-        .filter(|node| node.initial_arrival_ms.is_some())
-        .collect::<Vec<_>>();
-    assert_eq!(roots.len(), 3);
+    let trees = trees(config());
+    assert_eq!(trees.len(), 3);
     assert_eq!(
-        &roots[0].request.input_sequence_hashes[..8],
-        &roots[1].request.input_sequence_hashes[..8]
+        &trees[0].nodes[0].request.input_sequence_hashes[..8],
+        &trees[1].nodes[0].request.input_sequence_hashes[..8]
     );
 }
 
@@ -93,14 +102,14 @@ fn compaction_rewrites_a_window_and_emits_metadata() {
     config.load = ResolvedLoad::streams(1, 1);
     config.context_window_tokens = 160;
     config.compaction_trigger_fraction = 0.75;
-    let scenario = GeneratedScenario::generate(config).unwrap();
-    let compactions = scenario
+    let tree = tree(config);
+    let compactions = tree
         .nodes
         .iter()
         .filter(|node| node.action == "compaction_attempt")
         .collect::<Vec<_>>();
     assert!(!compactions.is_empty());
-    assert_eq!(scenario.compaction_operations.len(), compactions.len());
+    assert_eq!(tree.compaction_operations.len(), compactions.len());
     assert!(compactions.iter().all(|node| {
         node.request
             .agent_context
@@ -108,7 +117,7 @@ fn compaction_rewrites_a_window_and_emits_metadata() {
             .and_then(|context| context.compaction.as_ref())
             .is_some()
     }));
-    assert!(scenario.nodes.iter().any(|node| node.window_epoch > 0));
+    assert!(tree.nodes.iter().any(|node| node.window_epoch > 0));
 }
 
 #[test]
@@ -121,8 +130,8 @@ fn compaction_attempts_share_identity_and_apply_once() {
     config.compaction_retry_probability = 1.0;
     config.compaction_max_attempts = 3;
 
-    let scenario = GeneratedScenario::generate(config).unwrap();
-    let operation = scenario.compaction_operations.first().unwrap();
+    let tree = tree(config);
+    let operation = tree.compaction_operations.first().unwrap();
     assert_eq!(operation.attempts.len(), 3);
     assert_eq!(operation.applied_attempt, 2);
     assert_eq!(operation.expected_apply_count, 1);
@@ -130,7 +139,7 @@ fn compaction_attempts_share_identity_and_apply_once() {
     let attempts = operation
         .attempts
         .iter()
-        .map(|ordinal| &scenario.nodes[*ordinal])
+        .map(|ordinal| &tree.nodes[*ordinal])
         .collect::<Vec<_>>();
     assert_eq!(
         attempts
@@ -166,18 +175,9 @@ fn blocking_swarm_joins_all_children() {
     config.fanout = UIntDistribution::fixed(3);
     config.blocking_probability = 1.0;
     config.compaction_enabled = false;
-    let scenario = GeneratedScenario::generate(config).unwrap();
-    assert_eq!(scenario.sessions.len(), 4);
-    assert_eq!(
-        scenario.session_topology,
-        GeneratedSessionTopology {
-            configured_top_level_sessions: 1,
-            configured_concurrent_sessions: Some(1),
-            generated_subagent_sessions: 3,
-            total_protocol_sessions: 4,
-        }
-    );
-    let root_completion = scenario
+    let tree = tree(config);
+    assert_eq!(tree.sessions.len(), 4);
+    let root_completion = tree
         .nodes
         .iter()
         .find(|node| {
@@ -192,22 +192,22 @@ fn blocking_swarm_joins_all_children() {
         })
         .unwrap();
     assert_eq!(root_completion.dependencies.len(), 3);
-    let swarm = scenario
+    let swarm = tree
         .nodes
         .iter()
         .find(|node| node.action == "swarm")
         .unwrap();
     assert_eq!(swarm.spawned_session_ids.len(), 3);
-    assert!(scenario.sessions.iter().skip(1).all(|session| {
-        session.parent_session_id.as_deref() == Some(scenario.sessions[0].session_id.as_str())
+    assert!(tree.sessions.iter().skip(1).all(|session| {
+        session.parent_session_id.as_deref() == Some(tree.sessions[0].session_id.as_str())
     }));
-    assert!(scenario.sessions.iter().all(|session| {
+    assert!(tree.sessions.iter().all(|session| {
         session.top_level_session_index == 0 && session.top_level_stream_slot == 0
     }));
 }
 
 #[test]
-fn closed_loop_stream_restarts_after_its_previous_top_level_session_completes() {
+fn stream_trees_carry_their_restart_delay_and_slot() {
     let mut config = config();
     config.load = ResolvedLoad::Streams {
         num_sessions: Some(3),
@@ -224,25 +224,21 @@ fn closed_loop_stream_restarts_after_its_previous_top_level_session_completes() 
     config.completion_probability = 0.0;
     config.compaction_enabled = false;
 
-    let scenario = GeneratedScenario::generate(config).unwrap();
-    assert_eq!(scenario.nodes.len(), 3);
-    assert_eq!(scenario.nodes[0].initial_arrival_ms, Some(0));
-    assert!(scenario.nodes[0].dependencies.is_empty());
-    assert_eq!(scenario.nodes[1].initial_arrival_ms, None);
-    assert_eq!(scenario.nodes[1].dependencies, vec![0]);
-    assert_eq!(scenario.nodes[1].delay_after_dependencies_ms, 17);
-    assert_eq!(scenario.nodes[2].dependencies, vec![1]);
-    assert_eq!(scenario.nodes[2].delay_after_dependencies_ms, 17);
-    assert!(
-        scenario
-            .sessions
-            .iter()
-            .all(|session| session.top_level_stream_slot == 0)
-    );
+    for tree in trees(config) {
+        assert_eq!(tree.nodes.len(), 1);
+        assert_eq!(tree.nodes[0].initial_arrival_ms, Some(0));
+        assert!(tree.nodes[0].dependencies.is_empty());
+        assert_eq!(tree.restart_delay_ms, 17);
+        assert!(
+            tree.sessions
+                .iter()
+                .all(|session| session.top_level_stream_slot == 0)
+        );
+    }
 }
 
 #[test]
-fn reports_call_and_time_weighted_tool_parallelism() {
+fn parallel_tool_phases_record_every_call() {
     let mut config = config();
     config.load = ResolvedLoad::streams(1, 1);
     config.turns = UIntDistribution::fixed(2);
@@ -257,37 +253,16 @@ fn reports_call_and_time_weighted_tool_parallelism() {
         class.latency_ms = UIntDistribution::fixed(10);
     }
 
-    let scenario = GeneratedScenario::generate(config).unwrap();
-    assert_eq!(scenario.tool_parallelism.tool_phases, 1);
-    assert_eq!(scenario.tool_parallelism.parallel_tool_phases, 1);
-    assert_eq!(scenario.tool_parallelism.tool_calls, 3);
-    assert_eq!(scenario.tool_parallelism.parallel_tool_calls, 3);
-    assert_eq!(scenario.tool_parallelism.parallel_call_fraction, 1.0);
-    assert_eq!(scenario.tool_parallelism.tool_work_ms, 30);
-    assert_eq!(scenario.tool_parallelism.tool_wall_ms, 10);
-    assert_eq!(scenario.tool_parallelism.parallel_wall_ms, 10);
-    assert_eq!(scenario.tool_parallelism.parallel_wall_time_fraction, 1.0);
-    assert_eq!(scenario.tool_parallelism.work_to_wall_ratio, 3.0);
+    let tree = tree(config);
+    assert_eq!(tree.nodes[0].action, "parallel_tools");
+    assert_eq!(tree.nodes[0].tool_events.len(), 3);
+    // Parallel calls start together, so the next turn waits for the longest one.
+    assert_eq!(tree.nodes[1].delay_after_dependencies_ms, 10);
 }
 
 #[test]
-fn trees_plan_the_same_alone_as_in_the_full_graph() {
+fn trees_plan_the_same_in_any_order() {
     let planner = TreePlanner::new(config()).unwrap();
-    let scenario = GeneratedScenario::generate(config()).unwrap();
-    let mut offset = 0;
-    for index in 0..3 {
-        let tree = planner.plan_tree(index).unwrap();
-        for (local, node) in tree.nodes.iter().enumerate() {
-            let joined = &scenario.nodes[offset + local];
-            assert_eq!(node.node_id, joined.node_id);
-            assert_eq!(
-                node.request.input_sequence_hashes,
-                joined.request.input_sequence_hashes
-            );
-        }
-        offset += tree.nodes.len();
-    }
-    // Planning out of order does not change a tree.
     let late = planner.plan_tree(2).unwrap();
     let early = TreePlanner::new(config()).unwrap().plan_tree(2).unwrap();
     assert_eq!(
@@ -371,7 +346,7 @@ fn request_rates_convert_to_session_arrivals() {
 }
 
 #[test]
-fn unbounded_streams_plan_lazily_but_not_as_one_graph() {
+fn unbounded_streams_plan_lazily() {
     let mut config = config();
     config.load = ResolvedLoad::Streams {
         num_sessions: None,
@@ -380,13 +355,7 @@ fn unbounded_streams_plan_lazily_but_not_as_one_graph() {
         restart_delay_ms: UIntDistribution::fixed(0),
         duration_minutes: Some(5.0),
     };
-    let planner = TreePlanner::new(config.clone()).unwrap();
+    let planner = TreePlanner::new(config).unwrap();
     assert_eq!(planner.tree_count(), None);
     assert!(planner.plan_tree(1_000_000).is_ok());
-    assert!(
-        GeneratedScenario::generate(config)
-            .unwrap_err()
-            .to_string()
-            .contains("duration_minutes")
-    );
 }

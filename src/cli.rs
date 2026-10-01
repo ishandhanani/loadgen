@@ -122,14 +122,13 @@ pub enum Command {
         run: RunArgs,
     },
 
-    /// Summarize a profile's traffic, and its request graph when small, without sending it.
+    /// Summarize a profile's traffic without sending it.
     Plan {
         /// Versioned TOML generator config.
         #[arg(long)]
         config: PathBuf,
 
-        /// Output directory for plan-summary.json and, when the plan fits one
-        /// graph, scenario.json, plan.dot, and optional plan.svg.
+        /// Output directory for plan-summary.json.
         #[arg(long)]
         output: PathBuf,
     },
@@ -157,8 +156,8 @@ pub enum Command {
         #[arg(long)]
         target: String,
 
-        /// Output directory for plan and run artifacts: plan-summary.json, run.json,
-        /// requests.jsonl, timeline.csv, and, for small plans, scenario.json and plan.dot.
+        /// Output directory for plan-summary.json, run.json, requests.jsonl, and
+        /// timeline.csv.
         #[arg(long)]
         output: PathBuf,
 

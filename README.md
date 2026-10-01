@@ -85,9 +85,6 @@ It reads dashboard data under `--root`, scans the request-trace object store wit
 ## Outputs
 
 - `plan-summary.json`: sampled session and request statistics, expected totals, and per-bucket arrivals for a generated plan of any size.
-- `scenario.json`: resolved generated profile and causal graph, for plans that fit `limits.max_nodes`.
-- `plan.dot`: Graphviz causal DAG grouped by top-level and child sessions, with spawn, join, and delay labels.
-- `plan.svg`: Graphviz rendering of `plan.dot` when the `dot` executable is available.
 - `requests.jsonl`: one result per completed request, including timing and output fidelity.
 - `timeline.csv`: requests, failures, root sessions started, request and token rates, and TTFT and latency percentiles per time bucket.
 - `run.json`: run configuration including the header dialect and HTTP version, achieved throughput and latency percentiles, and pass/fail status: a run passes when every sent request succeeded with its planned output length.
@@ -102,7 +99,6 @@ It reads dashboard data under `--root`, scans the request-trace object store wit
 - [Subagents and swarms](docs/subagents.md): delegation graphs, joins, lineage, KV sharing, and current limits.
 - [Compaction](docs/compaction.md): trigger logic, physical attempts, KV-window changes, and telemetry boundaries.
 - [HTTP service](docs/serve.md): `agent-loadgen serve` endpoints, replay-bundle job model, caches and limits, and deployment behind Caddy.
-- [Complex concurrent plan example](examples/complex-concurrency/README.md): a topology-rich TOML profile with its rendered causal graph.
 
 ## Current boundaries
 

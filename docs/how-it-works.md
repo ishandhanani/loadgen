@@ -71,9 +71,7 @@ Generation has a planning phase and an execution phase.
 - Dependencies and delay after dependency completion.
 - Tool, subagent, swarm, or compaction metadata.
 
-`plan-summary.json` summarizes a sample of trees for plans of any size. A plan that fits `limits.max_nodes` is also joined into one graph and written to `scenario.json`. Runtime model text never changes the plan.
-
-The artifact also reports realized tool parallelism in two forms: the fraction of calls belonging to multi-call phases and the fraction of synthetic tool wall time with concurrent calls. This keeps high call batching from being mistaken for equally high time parallelism.
+`plan-summary.json` summarizes a sample of trees for plans of any size. Runtime model text never changes the plan.
 
 ### Execution
 

@@ -10,7 +10,7 @@ use std::time::Instant;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
-use axum::http::header::{CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -25,9 +25,7 @@ use crate::bundle::{BundleJob, BundleRequest, resolve_bundle, run_bundle_job};
 use crate::hours::TooManyHours;
 use crate::jobs::{JobState, is_safe_id};
 use crate::metrics::{Rejection, metrics_handler, track_http};
-use crate::plan::{
-    MAX_TOML_BYTES, PlanFailure, materialize_scenario_blocking, run_plan_blocking, toml_sha256,
-};
+use crate::plan::{MAX_TOML_BYTES, run_plan, toml_sha256};
 use crate::shards::list_model_shards;
 
 const LOG_TAIL_CHARS: usize = 4000;
@@ -124,8 +122,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/plan", post(plan))
         .route("/jobs/{id}", get(job))
         .route("/jobs/{id}/bundle", get(bundle))
-        .route("/jobs/{id}/scenario.json", get(scenario))
-        .route("/jobs/{id}/plan.svg", get(plan_svg))
         .route("/metrics", get(metrics_handler))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
@@ -251,78 +247,39 @@ async fn plan(
     if toml.len() > MAX_TOML_BYTES {
         return Err(ApiError::bad_request("config too large"));
     }
-    state.metrics.job_submitted(&client, "plan");
-    let sha = toml_sha256(&toml);
-    if let Some(job_id) = state.store.cached_plan(&sha) {
-        let job = state.store.job_dir(&job_id)?;
-        let cached = tokio::fs::read(job.path.join("plan.json")).await;
-        match cached {
-            Ok(bytes) => {
-                info!(job = %job_id, "plan cache hit");
-                state.metrics.job_finished("plan", "cached");
-                return Ok(([(CONTENT_TYPE, "application/json")], bytes).into_response());
-            }
-            Err(error) => warn!(job = %job_id, %error, "cached plan.json unreadable; replanning"),
-        }
-    }
-
-    let job = state.store.create("p")?;
-    let mut job_state = JobState::new("plan", "running");
-    job_state.toml_sha256 = Some(sha.clone());
-    job.write_state(&mut job_state)?;
-    let worker_job = job.clone();
     let metrics = &state.metrics;
+    metrics.job_submitted(&client, "plan");
+    let sha = toml_sha256(&toml);
     let inflight = metrics.jobs_inflight.with_label_values(&["plan"]);
     inflight.inc();
     let started = Instant::now();
-    let result = tokio::task::spawn_blocking(move || run_plan_blocking(&worker_job, &toml)).await;
+    let result = tokio::task::spawn_blocking(move || run_plan(&toml)).await;
     inflight.dec();
     metrics
         .plan_duration
         .observe(started.elapsed().as_secs_f64());
     let result = result
         .map_err(|error| ApiError::internal(anyhow::anyhow!("plan task panicked: {error}")))?;
-    let response = match result {
-        Ok(response) => response,
-        Err(PlanFailure::Invalid(message)) => {
+    match result {
+        Ok(response) => {
+            metrics.job_finished("plan", "done");
+            info!(
+                toml_sha256 = %sha,
+                trees = response.timeline.trees,
+                elapsed_ms = response.elapsed_ms,
+                "planned profile"
+            );
+            Ok(axum::Json(response).into_response())
+        }
+        Err(message) => {
             metrics.job_finished("plan", "error");
-            job_state.state = "error".to_string();
-            job_state.error = Some(message.clone());
-            job.write_state(&mut job_state)?;
-            state.store.prune();
-            return Ok((
+            Ok((
                 StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(json!({ "job_id": job.id, "error": message })),
+                axum::Json(json!({ "error": message })),
             )
-                .into_response());
+                .into_response())
         }
-        Err(PlanFailure::Internal(error)) => {
-            metrics.job_finished("plan", "error");
-            job_state.state = "error".to_string();
-            job_state.error = Some(format!("{error:#}"));
-            job.write_state(&mut job_state)?;
-            return Err(ApiError::internal(error));
-        }
-    };
-    metrics.job_finished("plan", "done");
-    let body = serde_json::to_vec(&response).map_err(|error| ApiError::internal(error.into()))?;
-    tokio::fs::write(job.path.join("plan.json"), &body)
-        .await
-        .map_err(|error| ApiError::internal(error.into()))?;
-    job_state.state = "done".to_string();
-    job_state.elapsed_ms = Some(response.elapsed_ms);
-    job.write_state(&mut job_state)?;
-    state.store.record_plan(&sha, &job.id);
-    info!(
-        job = %job.id,
-        nodes = response.summary.nodes,
-        sessions = response.summary.sessions,
-        elapsed_ms = response.elapsed_ms,
-        has_svg = response.has_svg,
-        "planned scenario"
-    );
-    state.store.prune();
-    Ok(([(CONTENT_TYPE, "application/json")], body).into_response())
+    }
 }
 
 async fn job(
@@ -369,63 +326,14 @@ async fn bundle(
         &path,
         "application/gzip",
         Some(format!("attachment; filename=\"{filename}\"")),
-        None,
     )
     .await
-}
-
-async fn scenario(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    let job = state
-        .store
-        .job_dir(&id)
-        .map_err(|_| ApiError::bad_request("bad job id"))?;
-    let gz_path = job.path.join("scenario.json.gz");
-    if gz_path.is_file() {
-        return stream_file(&gz_path, "application/json", None, Some("gzip")).await;
-    }
-    let plain_path = job.path.join("scenario.json");
-    if plain_path.is_file() {
-        return stream_file(&plain_path, "application/json", None, None).await;
-    }
-    if !job.path.join("config.toml").is_file()
-        || !job
-            .read_state()?
-            .is_some_and(|job_state| job_state.kind == "plan" && job_state.state == "done")
-    {
-        return Err(ApiError::not_found("no scenario"));
-    }
-    let worker_job = job.clone();
-    let path = tokio::task::spawn_blocking(move || materialize_scenario_blocking(&worker_job))
-        .await
-        .map_err(|error| {
-            ApiError::internal(anyhow::anyhow!("scenario task panicked: {error}"))
-        })??;
-    stream_file(&path, "application/json", None, None).await
-}
-
-async fn plan_svg(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    let job = state
-        .store
-        .job_dir(&id)
-        .map_err(|_| ApiError::bad_request("bad job id"))?;
-    let path = job.path.join("plan.svg");
-    if !path.is_file() {
-        return Err(ApiError::not_found("no plan.svg (graphviz missing?)"));
-    }
-    stream_file(&path, "image/svg+xml", None, None).await
 }
 
 async fn stream_file(
     path: &std::path::Path,
     content_type: &'static str,
     disposition: Option<String>,
-    content_encoding: Option<&'static str>,
 ) -> Result<Response, ApiError> {
     let file = tokio::fs::File::open(path).await.map_err(|error| {
         ApiError::internal(anyhow::anyhow!(
@@ -451,9 +359,6 @@ async fn stream_file(
                 ApiError::internal(anyhow::anyhow!("filename is not a valid header value"))
             })?,
         );
-    }
-    if let Some(encoding) = content_encoding {
-        headers.insert(CONTENT_ENCODING, encoding.parse().expect("static header"));
     }
     Ok((headers, Body::from_stream(ReaderStream::new(file))).into_response())
 }

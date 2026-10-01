@@ -225,18 +225,10 @@ async fn health_plan_and_replay_bundle_flow() {
         started.elapsed().as_millis(),
         plan["elapsed_ms"]
     );
-    let job_id = plan["job_id"].as_str().unwrap().to_string();
-    assert!(job_id.starts_with("p-") && job_id.len() == 14);
-    assert_eq!(
-        plan["summary"]["nodes"].as_u64().unwrap(),
-        plan["timeline"]["nodes"].as_array().unwrap().len() as u64
-    );
-    assert_eq!(
-        plan["summary"]["sessions"].as_u64().unwrap(),
-        plan["timeline"]["sessions"].as_array().unwrap().len() as u64
-    );
-    assert!(plan["summary"]["tool_parallelism"]["tool_calls"].is_number());
-    assert!(plan["summary"]["scenario_digest"].is_string());
+    assert_eq!(plan["summary"]["top_level_sessions"], json!(4));
+    assert_eq!(plan["timeline"]["trees"], json!(4));
+    assert!(plan["summary"]["per_request"]["ideal_prefix_hit_rate"].is_number());
+    assert!(!plan["timeline"]["nodes"].as_array().unwrap().is_empty());
     assert_eq!(
         plan["command"],
         json!(
@@ -258,49 +250,6 @@ async fn health_plan_and_replay_bundle_flow() {
         assert!(!first_node[key].is_null(), "timeline node missing {key}");
     }
 
-    // Identical TOML is a cache hit.
-    let again: Value = client
-        .post(format!("{base}/plan"))
-        .json(&json!({"toml": toml}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(again["job_id"], plan["job_id"]);
-
-    // scenario.json round-trips through the gzip store.
-    let response = client
-        .get(format!("{base}/jobs/{job_id}/scenario.json"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let encoding = response
-        .headers()
-        .get("content-encoding")
-        .map(|v| v.to_str().unwrap().to_string());
-    let bytes = response.bytes().await.unwrap();
-    let text = if encoding.as_deref() == Some("gzip") {
-        gunzip(&bytes)
-    } else {
-        String::from_utf8(bytes.to_vec()).unwrap()
-    };
-    assert_eq!(text.len() as u64, plan["scenario_bytes"].as_u64().unwrap());
-    let scenario: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(
-        scenario["nodes"].as_array().unwrap().len() as u64,
-        plan["summary"]["nodes"].as_u64().unwrap()
-    );
-    let svg = client
-        .get(format!("{base}/jobs/{job_id}/plan.svg"))
-        .send()
-        .await
-        .unwrap();
-    let svg_status = svg.status().as_u16();
-    assert_eq!(svg_status == 200, plan["has_svg"] == json!(true));
-
     // schema-4 profiles get the actionable migration message.
     let response = client
         .post(format!("{base}/plan"))
@@ -310,7 +259,6 @@ async fn health_plan_and_replay_bundle_flow() {
         .unwrap();
     assert_eq!(response.status(), 422);
     let error: Value = response.json().await.unwrap();
-    assert!(error["job_id"].as_str().unwrap().starts_with("p-"));
     assert!(
         error["error"]
             .as_str()
@@ -504,12 +452,9 @@ async fn health_plan_and_replay_bundle_flow() {
     );
     let metrics = response.text().await.unwrap();
     let has_line = |line: &str| metrics.lines().any(|candidate| candidate == line);
-    // Unknown session, unknown job, plus plan.svg when Graphviz is not installed.
-    let not_found = 2 + usize::from(svg_status == 404);
     for line in [
-        // One real plan, one identical-TOML cache hit, one 422 (schema 4).
+        // One real plan and one 422 (schema 4).
         "loadgen_serve_jobs_total{kind=\"plan\",result=\"done\"} 1",
-        "loadgen_serve_jobs_total{kind=\"plan\",result=\"cached\"} 1",
         "loadgen_serve_jobs_total{kind=\"plan\",result=\"error\"} 1",
         // Tree, solo, and post-invalidation bundle jobs; one unchanged-shard cache hit.
         "loadgen_serve_jobs_total{kind=\"replay\",result=\"done\"} 3",
@@ -518,13 +463,14 @@ async fn health_plan_and_replay_bundle_flow() {
         "loadgen_serve_jobs_inflight{kind=\"plan\"} 0",
         "loadgen_serve_jobs_inflight{kind=\"replay\"} 0",
         "loadgen_serve_jobs_queued 0",
-        "loadgen_serve_http_requests_total{method=\"POST\",route=\"/plan\",status=\"200\"} 2",
+        "loadgen_serve_http_requests_total{method=\"POST\",route=\"/plan\",status=\"200\"} 1",
         "loadgen_serve_http_requests_total{method=\"POST\",route=\"/plan\",status=\"400\"} 2",
         "loadgen_serve_http_requests_total{method=\"POST\",route=\"/plan\",status=\"422\"} 1",
         "loadgen_serve_http_requests_total{method=\"POST\",route=\"/replay-bundle\",status=\"404\"} 1",
         "loadgen_serve_http_requests_total{method=\"GET\",route=\"/jobs/{id}/bundle\",status=\"200\"} 1",
         "loadgen_serve_rejected_total{reason=\"bad_request\"} 3",
-        &format!("loadgen_serve_rejected_total{{reason=\"not_found\"}} {not_found}"),
+        // Unknown session and unknown job.
+        "loadgen_serve_rejected_total{reason=\"not_found\"} 2",
         "loadgen_serve_rejected_total{reason=\"per_ip_cap\"} 0",
         "loadgen_serve_rejected_total{reason=\"too_many_hours\"} 0",
         // 2 + 2 + 3 shards across the three completed jobs.
@@ -536,8 +482,8 @@ async fn health_plan_and_replay_bundle_flow() {
         "loadgen_serve_s3_errors_total 0",
         "loadgen_serve_active_clients{window=\"15m\"} 1",
         "loadgen_serve_active_clients{window=\"24h\"} 1",
-        // Two accepted plans (real + cached); the 422, 400s never reach acceptance.
-        "loadgen_serve_client_jobs_total{client=\"127.0.0.1\",kind=\"plan\"} 3",
+        // The real plan and the 422; the 400s never reach acceptance.
+        "loadgen_serve_client_jobs_total{client=\"127.0.0.1\",kind=\"plan\"} 2",
         "loadgen_serve_client_jobs_total{client=\"127.0.0.1\",kind=\"replay\"} 4",
         &format!(
             "loadgen_serve_build_info{{version=\"{}\"}} 1",
@@ -556,7 +502,7 @@ async fn health_plan_and_replay_bundle_flow() {
         .unwrap();
     assert!(shard_bytes > 0, "{metrics}");
     for histogram in [
-        "loadgen_serve_http_request_duration_seconds_count{route=\"/plan\"} 5",
+        "loadgen_serve_http_request_duration_seconds_count{route=\"/plan\"} 4",
         "loadgen_serve_plan_duration_seconds_count 2",
         "loadgen_serve_bundle_job_duration_seconds_count{result=\"done\"} 3",
     ] {
