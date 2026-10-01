@@ -39,56 +39,13 @@ pub struct TokenAlphabetManifest {
     pub token_ids_digest_sha256: String,
 }
 
-#[derive(Debug, Clone)]
-pub enum TokenAlphabetSource {
-    Tokenizer(String),
-    UnverifiedRange { start: u32, size: u32 },
-}
-
 impl SafeTokenAlphabet {
-    pub fn load(
-        source: TokenAlphabetSource,
-        limit: usize,
-        extra_excluded_ids: &[u32],
-    ) -> Result<Self> {
+    /// The first `limit` ordinary token IDs of a tokenizer: a Hugging Face
+    /// model ID, or a local `tokenizer.json` or model directory.
+    pub fn from_tokenizer(source: &str, limit: usize, extra_excluded_ids: &[u32]) -> Result<Self> {
         if limit < 2 {
             bail!("token alphabet size must be at least two");
         }
-        match source {
-            TokenAlphabetSource::Tokenizer(source) => {
-                Self::from_tokenizer(&source, limit, extra_excluded_ids)
-            }
-            TokenAlphabetSource::UnverifiedRange { start, size } => {
-                Self::from_unverified_range(start, size, extra_excluded_ids)
-            }
-        }
-    }
-
-    pub(crate) fn from_unverified_range(
-        start: u32,
-        size: u32,
-        extra_excluded_ids: &[u32],
-    ) -> Result<Self> {
-        if size < 2 {
-            bail!("token alphabet size must be at least two");
-        }
-        let end = start
-            .checked_add(size)
-            .context("token alphabet exceeds u32")?;
-        let excluded = extra_excluded_ids.iter().copied().collect::<BTreeSet<_>>();
-        let token_ids = (start..end)
-            .filter(|token_id| !excluded.contains(token_id))
-            .collect::<Vec<_>>();
-        Self::finish(
-            token_ids,
-            format!("unverified-range:{start}:{size}"),
-            false,
-            None,
-            excluded.len(),
-        )
-    }
-
-    fn from_tokenizer(source: &str, limit: usize, extra_excluded_ids: &[u32]) -> Result<Self> {
         let files = TokenizerFiles::resolve(source)?;
         let tokenizer = Tokenizer::from_file(&files.tokenizer_json).map_err(|error| {
             anyhow::anyhow!(
@@ -127,6 +84,31 @@ impl SafeTokenAlphabet {
             files.source,
             true,
             Some(hex::encode(Sha256::digest(tokenizer_bytes))),
+            excluded.len(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_unverified_range(
+        start: u32,
+        size: u32,
+        extra_excluded_ids: &[u32],
+    ) -> Result<Self> {
+        if size < 2 {
+            bail!("token alphabet size must be at least two");
+        }
+        let end = start
+            .checked_add(size)
+            .context("token alphabet exceeds u32")?;
+        let excluded = extra_excluded_ids.iter().copied().collect::<BTreeSet<_>>();
+        let token_ids = (start..end)
+            .filter(|token_id| !excluded.contains(token_id))
+            .collect::<Vec<_>>();
+        Self::finish(
+            token_ids,
+            format!("unverified-range:{start}:{size}"),
+            false,
+            None,
             excluded.len(),
         )
     }
@@ -309,9 +291,8 @@ fn token_content(value: &serde_json::Value) -> Option<&str> {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TokenDictionaryManifest {
-    pub trace_block_size: usize,
+    pub block_size: usize,
     pub codeword_algorithm: &'static str,
-    pub codeword_count: usize,
     pub alphabet: TokenAlphabetManifest,
     pub dictionary_digest_sha256: String,
 }
@@ -326,13 +307,9 @@ pub struct TokenDictionary {
 }
 
 impl TokenDictionary {
-    pub fn new(
-        block_size: usize,
-        codeword_count: usize,
-        alphabet: SafeTokenAlphabet,
-    ) -> Result<Self> {
+    pub fn new(block_size: usize, alphabet: SafeTokenAlphabet) -> Result<Self> {
         if block_size == 0 {
-            bail!("trace block size must be greater than zero");
+            bail!("block size must be greater than zero");
         }
         validate_codeword_capacity(block_size, alphabet.len())?;
 
@@ -341,9 +318,8 @@ impl TokenDictionary {
         digest.update((block_size as u64).to_le_bytes());
         digest.update(alphabet.manifest().token_ids_digest_sha256.as_bytes());
         let manifest = TokenDictionaryManifest {
-            trace_block_size: block_size,
+            block_size,
             codeword_algorithm: CODEWORD_ALGORITHM,
-            codeword_count,
             alphabet: alphabet.manifest().clone(),
             dictionary_digest_sha256: hex::encode(digest.finalize()),
         };
@@ -365,26 +341,6 @@ impl TokenDictionary {
         self.salt = salt;
         self.unsalted_prefix_blocks = unsalted_prefix_blocks;
         self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn build(requests: &[TraceRequest], alphabet: SafeTokenAlphabet) -> Result<Self> {
-        let block_size = requests
-            .first()
-            .context("cannot build a token dictionary for an empty trace")?
-            .trace_block_size;
-        if requests
-            .iter()
-            .any(|request| request.trace_block_size != block_size)
-        {
-            bail!("all requests must use one trace block size");
-        }
-        let codeword_count = requests
-            .iter()
-            .flat_map(|request| request.input_sequence_hashes.iter().copied())
-            .collect::<BTreeSet<_>>()
-            .len();
-        Self::new(block_size, codeword_count, alphabet)
     }
 
     pub fn manifest(&self) -> &TokenDictionaryManifest {
@@ -428,7 +384,7 @@ fn validate_codeword_capacity(block_size: usize, alphabet_size: usize) -> Result
     }
     if capacity <= u64::MAX as u128 {
         bail!(
-            "a token alphabet of {alphabet_size} IDs and block size {block_size} cannot encode every u64 trace hash without collisions"
+            "a token alphabet of {alphabet_size} IDs and block size {block_size} cannot encode every u64 block hash without collisions"
         );
     }
     Ok(())
@@ -472,11 +428,8 @@ mod tests {
         TraceRequest {
             ordinal: 0,
             source_request_id: id.to_string(),
-            source_x_request_id: None,
-            source_model: None,
             input_tokens,
             output_tokens: 2,
-            request_received_ms: 1,
             trace_block_size: 4,
             input_sequence_hashes: hashes.to_vec(),
             agent_context: None,
@@ -491,8 +444,7 @@ mod tests {
     fn preserves_shared_prefix_and_exact_length() {
         let first = request("a", 6, &[11, 22]);
         let second = request("b", 8, &[11, 33]);
-        let dictionary =
-            TokenDictionary::build(&[first.clone(), second.clone()], alphabet()).unwrap();
+        let dictionary = TokenDictionary::new(4, alphabet()).unwrap();
         let first_tokens = dictionary.synthesize(&first).unwrap();
         let second_tokens = dictionary.synthesize(&second).unwrap();
 
@@ -506,7 +458,7 @@ mod tests {
     fn salt_changes_content_after_the_unsalted_prefix_only() {
         let first = request("a", 12, &[11, 22, 33]);
         let second = request("b", 12, &[11, 22, 44]);
-        let plain = TokenDictionary::build(&[first.clone(), second.clone()], alphabet()).unwrap();
+        let plain = TokenDictionary::new(4, alphabet()).unwrap();
         let salted = plain.clone().with_salt(0x5eed, 1);
         let plain_first = plain.synthesize(&first).unwrap();
         let salted_first = salted.synthesize(&first).unwrap();
@@ -544,7 +496,7 @@ mod tests {
     #[test]
     fn rejects_insufficient_codeword_capacity() {
         let alphabet = SafeTokenAlphabet::from_unverified_range(0, 2, &[]).unwrap();
-        assert!(TokenDictionary::new(16, 1, alphabet).is_err());
+        assert!(TokenDictionary::new(16, alphabet).is_err());
     }
 
     #[test]
@@ -576,12 +528,9 @@ mod tests {
         )
         .unwrap();
 
-        let alphabet = SafeTokenAlphabet::load(
-            TokenAlphabetSource::Tokenizer(directory.path().display().to_string()),
-            16,
-            &[],
-        )
-        .unwrap();
+        let alphabet =
+            SafeTokenAlphabet::from_tokenizer(&directory.path().display().to_string(), 16, &[])
+                .unwrap();
         assert_eq!(alphabet.token_ids, vec![0, 1, 2]);
         assert!(alphabet.manifest.verified);
         assert_eq!(alphabet.manifest.excluded_token_count, 1);

@@ -8,13 +8,11 @@ Keep agent behavior separate from serving policy. Dynamo and the inference engin
 
 ## Traffic models
 
-All traffic is agentic and causal. Captured replay uses Dynamo's lowering policy: independent roots retain recorded arrival offsets, while same-session turns, tool continuations, subagent launches, and joins wait for actual replay completions plus their recorded residual delays. Traces without `agent_context` are rejected.
+All traffic is generated, agentic, and causal. A model response or sampled agent delay releases the next request. Target latency therefore changes the achieved request rate. Top-level session trees start either in closed-loop streams or at arrival times sampled from a rate schedule. Each tree has its own seeded random stream, so `generate` plans trees lazily and a run's memory follows live trees.
 
-Generated traffic is also causal. A model response or sampled agent delay releases the next request. Target latency therefore changes the achieved request rate in both modes. Top-level session trees start either in closed-loop streams or at arrival times sampled from a rate schedule. Each tree has its own seeded random stream, so `generate` plans trees lazily and a run's memory follows live trees.
+Ordinary generated turns have positive input and output token counts. Compaction attempts carry the planned summary length as their output budget. A session completes with its last model response. With `--dynamo-session-final`, that response carries `x-dynamo-session-final: true`; the header marks an existing request and never adds one. Do not add lifecycle-control requests or zero-output close nodes without a new design decision.
 
-Captured requests and ordinary generated turns have positive input and output token counts. Compaction attempts carry the planned summary length as their output budget. A session completes with its last model response. With `--dynamo-session-final`, that response carries `x-dynamo-session-final: true`; the header marks an existing request and never adds one. Do not add lifecycle-control requests or zero-output close nodes without a new design decision.
-
-Traffic shape and wire protocol are separate. The profile or trace defines shape; there is no per-agent preset. `--headers {claude-code|codex}` selects the harness header dialect at run time and must never influence planning or digests. A dialect sends only its harness's own headers; `x-dynamo-session-final` is opt-in through `--dynamo-session-final`.
+Traffic shape and wire protocol are separate. The profile defines shape; there is no per-agent preset. `--headers {claude-code|codex}` selects the harness header dialect at run time and must never influence planning or digests. A dialect sends only its harness's own headers; `x-dynamo-session-final` is opt-in through `--dynamo-session-final`.
 
 ## Subagents
 
@@ -36,11 +34,9 @@ The generator does not support child roles, per-child profiles, child-to-child m
 
 | Path | Purpose |
 |---|---|
-| `crates/core/` | Header dialect enum, agent context, trace contracts, percentiles, and stable ready-time queue. No I/O or workload policy. |
-| `crates/trace/` | Trace v1 parsing, validation, and Dynamo-derived causal lowering. |
+| `crates/core/` | Header dialect enum, agent context, request contract, percentiles, and stable ready-time queue. No I/O or workload policy. |
 | `crates/generate/` | Strict profile schema, deterministic sampling, serialized scenarios, and synthetic graph planning. |
-| `crates/replay/` | Token synthesis, harness headers, HTTP/SSE transport, causal schedulers, and run artifacts. |
-| `crates/serve/` | HTTP service for the traces dashboard: in-process plan previews, replay-bundle export from the trace store, job state, caches, and limits. Depends on `trace`, `generate`, and `replay`; nothing depends on it. |
+| `crates/replay/` | Token synthesis, harness headers, HTTP/SSE transport, the causal scheduler, and run artifacts. |
 | `src/` | Thin `agent-loadgen` CLI: flags, command composition, and exit behavior. |
 | `profiles/` | Example profiles: harness- and workload-calibrated shapes and an arrival schedule; shape only, no header selection. |
 | `docs/` | Architecture and detailed usage guides. |
@@ -53,7 +49,7 @@ The generator does not support child roles, per-child profiles, child-to-child m
 - Keep the profile schema strict. Reject unknown fields.
 - Keep prompt semantics and tool execution out of scope.
 - Keep cache-policy decisions out of this repository.
-- Keep `core` free of HTTP, Tokio, tokenizers, trace parsing, and generator policy. Among this workspace's crates, `trace` and `generate` may depend only on `core`; `replay` may consume both but neither may depend on `replay`; `serve` may consume all of them and no crate depends on `serve`.
+- Keep `core` free of HTTP, Tokio, tokenizers, and generator policy. Among this workspace's crates, `generate` may depend only on `core`; `replay` may consume both, and `generate` may not depend on `replay`.
 - Add behavior details to `docs/`. Keep `README.md` as a short entry point.
 - Keep compaction and subagent behavior in their dedicated guides.
 - Update tests and docs when a timing, token-shape, or dependency contract changes.
@@ -84,3 +80,5 @@ done
 ## Git
 
 Use `origin` for NVIDIA-dev/agent-loadgen. Do not push this repository to the old `cas` remote. Push only when the user asks. Sign commits with DCO and keep one logical change in each commit. Do not add generated attribution or coauthor lines.
+
+Releases are automatic: every commit on `main` that passes CI is published by `.github/workflows/release.yml` as `v<major>.<minor>.<commits on main>` with x86_64 and aarch64 Linux binaries. Major and minor come from `[workspace.package]` in `Cargo.toml`; change them only when the user asks.

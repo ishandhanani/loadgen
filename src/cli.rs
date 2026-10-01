@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use agent_loadgen_core::HeaderDialect;
-use agent_loadgen_replay::token_shape::{SafeTokenAlphabet, TokenAlphabetSource};
+use agent_loadgen_replay::token_shape::SafeTokenAlphabet;
 use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
 
@@ -26,15 +25,8 @@ pub struct TokenArgs {
 
 impl TokenArgs {
     pub fn load(self) -> Result<SafeTokenAlphabet> {
-        SafeTokenAlphabet::load(TokenAlphabetSource::Tokenizer(self.tokenizer), 1024, &[])
+        SafeTokenAlphabet::from_tokenizer(&self.tokenizer, 1024, &[])
     }
-}
-
-#[derive(Debug, Args)]
-pub struct TraceSelectionArgs {
-    /// Replay one session in isolation.
-    #[arg(long)]
-    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -60,76 +52,13 @@ impl RunArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Validate and summarize an agentic trace and its causal graph.
-    Inspect {
-        /// Raw or wrapped Dynamo request trace files.
-        #[arg(required = true)]
-        trace: Vec<PathBuf>,
-
-        #[command(flatten)]
-        selection: TraceSelectionArgs,
-
-        #[command(flatten)]
-        tokens: TokenArgs,
-    },
-
-    /// Replay a trace against a live Dynamo frontend.
-    Replay {
-        /// Raw or wrapped Dynamo request trace files.
-        #[arg(required = true)]
-        trace: Vec<PathBuf>,
-
-        /// Coding-agent harness whose request headers to send.
-        #[arg(long = "headers", value_enum)]
-        header_dialect: HeaderDialect,
-
-        /// Also mark each session's last request with `x-dynamo-session-final: true`.
-        /// No harness sends this Dynamo extension; enable it only for deployments that consume it.
-        #[arg(long)]
-        dynamo_session_final: bool,
-
-        /// Model name sent to Dynamo.
-        #[arg(long)]
-        model: String,
-
-        /// Dynamo base URL or full Chat Completions URL.
-        #[arg(long)]
-        target: String,
-
-        /// Output directory for run.json and requests.jsonl.
-        #[arg(long)]
-        output: PathBuf,
-
-        #[command(flatten)]
-        selection: TraceSelectionArgs,
-
-        #[command(flatten)]
-        tokens: TokenArgs,
-
-        /// Per-request HTTP timeout.
-        #[arg(long, default_value_t = 600)]
-        timeout_seconds: u64,
-
-        /// Divide root offsets and dependency delays by this value.
-        #[arg(long, default_value_t = 1.0)]
-        time_scale: f64,
-
-        /// Add a static target header as NAME=VALUE. Repeat the flag for more headers.
-        #[arg(long = "header")]
-        static_headers: Vec<String>,
-
-        #[command(flatten)]
-        run: RunArgs,
-    },
-
-    /// Summarize a profile's traffic, and its request graph when small, without sending it.
+    /// Summarize a profile's traffic without sending it.
     Plan {
         /// Versioned TOML generator config.
         #[arg(long)]
         config: PathBuf,
 
-        /// Output directory for plan-summary.json and, when the plan fits one
-        /// graph, scenario.json, plan.dot, and optional plan.svg.
+        /// Output directory for plan-summary.json.
         #[arg(long)]
         output: PathBuf,
     },
@@ -157,8 +86,8 @@ pub enum Command {
         #[arg(long)]
         target: String,
 
-        /// Output directory for plan and run artifacts: plan-summary.json, run.json,
-        /// requests.jsonl, timeline.csv, and, for small plans, scenario.json and plan.dot.
+        /// Output directory for plan-summary.json, run.json, requests.jsonl, and
+        /// timeline.csv.
         #[arg(long)]
         output: PathBuf,
 
@@ -175,29 +104,5 @@ pub enum Command {
 
         #[command(flatten)]
         run: RunArgs,
-    },
-
-    /// Serve plan previews and replay-bundle exports over HTTP for the traces dashboard.
-    Serve {
-        /// dynamo-traces root containing web/data; jobs go to <root>/loadgen-jobs (default ~/dynamo-traces).
-        #[arg(long)]
-        root: Option<PathBuf>,
-
-        /// Address to listen on.
-        #[arg(long, default_value = "127.0.0.1:8096")]
-        listen: SocketAddr,
-
-        /// `export NAME=value` file with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and S3_ENDPOINT_URL
-        /// (default ~/.config/dynamo-traces/env).
-        #[arg(long)]
-        creds: Option<PathBuf>,
-
-        /// Replay-bundle jobs scanning shards at the same time.
-        #[arg(long, default_value_t = 3)]
-        bundle_concurrency: usize,
-
-        /// Newest job directories to keep; older ones are pruned.
-        #[arg(long, default_value_t = 50)]
-        keep_jobs: usize,
     },
 }

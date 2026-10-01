@@ -1,6 +1,6 @@
 # Generator configuration
 
-Generator profiles are strict, versioned TOML. Unknown fields and unsupported schema versions fail during planning. `scenario.json` contains the fully resolved configuration, so a run does not depend on hidden defaults after planning.
+Generator profiles are strict, versioned TOML. Unknown fields and unsupported schema versions fail during planning. Every omitted field resolves to a documented default, and `plan-summary.json` records the digest of the resolved profile.
 
 Schema version 5 defines traffic shape entirely in the profile. There is no `agent` field and no per-agent preset: every omitted field resolves to the single neutral default set listed under [Defaults](#defaults). The coding-agent harness is a run-time wire choice, `--headers {claude-code|codex}`, and it never changes the plan or its digests.
 
@@ -24,25 +24,13 @@ arrival or stream -> session tree -> model request
 
 Generated traffic is closed-loop inside each session tree. A tree starts at its scheduled arrival, or, for streams, during the ramp-up or `restart_delay_ms` after its stream's previous tree completes. Every later request becomes ready only after all graph dependencies complete, plus its sampled virtual delay. The final model response of the root session completes the tree. Target response latency therefore shapes the generated request rate. The scheduler can still run independent streams and sibling subagents concurrently. A blocking child or swarm joins the parent. A non-blocking child continues in its own session while the parent continues.
 
-The generator does not execute tools or generate meaningful text. Tool classes sample delay, result-token geometry, failure, and retry behavior. Those sampled outcomes and direct child-session IDs are recorded on their originating node in `scenario.json`.
+The generator does not execute tools or generate meaningful text. Tool classes sample delay, result-token geometry, failure, and retry behavior.
 
 ## Planning and execution
 
 Each top-level session tree samples from its own random stream, derived from the seed and the tree's index, so any tree can be planned alone and in any order with the same result. `generate` plans each tree about two seconds before it starts and drops it when its last request completes, so a run of any length holds only live trees in memory.
 
-`plan` and `generate` both write `plan-summary.json`: session-tree and request statistics from up to 1,000 sampled trees, expected totals, the ideal prefix-cache hit rate, and, for arrivals, the per-bucket session starts and expected request rate. When the whole plan fits `limits.max_nodes`, they also join every tree into one request graph and write `scenario.json` and `plan.dot`.
-
-## Plan graph
-
-`plan` writes `plan.dot` beside `scenario.json` when the plan fits one graph; `generate` writes the same graph into its run directory before traffic starts. It is the canonical causal overview: top-level session trees contain nested child-session clusters, node labels show action and ISL/OSL, and edges label continuation, stream restart, spawn, blocking join, and sampled client-side delay. A non-blocking spawn has a `parent continues` edge. A multi-child blocking join converges on a `join all N children` diamond; only its outgoing edge to the parent successor carries the sampled join delay. A `stream restart` edge joins successive top-level trees in one configured stream and carries the sampled `restart_delay_ms`.
-
-When Graphviz's `dot` executable is on `PATH`, the commands also write `plan.svg`. Otherwise the plan remains successful with `plan.dot`, which can be rendered later:
-
-```bash
-dot -Tsvg plan.dot -o plan.svg
-```
-
-The graph intentionally does not assign durations to model requests. Generated traffic is closed-loop, so model service time comes from the target at execution. It shows all control-flow and client-side timing a user can tune in TOML: initial stream arrival, tool and think delays, child spawn, blocking joins, compaction attempts, and stream restart dependencies.
+`plan` and `generate` both write `plan-summary.json`: session-tree and request statistics from up to 1,000 sampled trees, expected totals, the ideal prefix-cache hit rate, and, for arrivals, the per-bucket session starts and expected request rate.
 
 ## Minimal profile
 
@@ -134,18 +122,6 @@ result_tokens = { kind = "log_normal", median = 1200.0, sigma = 1.1, min = 64, m
 error_probability = 0.08
 ```
 
-## Parallelism validation
-
-`scenario.json` records `tool_parallelism` from the realized samples:
-
-- `parallel_call_fraction`: fraction of tool calls that belong to a multi-call phase.
-- `parallel_wall_time_fraction`: fraction of synthetic tool-phase wall time with at least two calls active.
-- `tool_work_ms`: sum of every individual tool duration.
-- `tool_wall_ms`: sum of each phase's critical-path duration.
-- `work_to_wall_ratio`: tool work divided by tool wall time.
-
-Generated calls in a parallel phase start together. Its wall time is the longest call, and its interval with at least two active calls is the second-longest call. These metrics describe harness-internal batching; they do not count incidental overlap between independent top-level streams or subagents.
-
 ## Compaction
 
 - `compaction.enabled`: enables context-window compaction.
@@ -172,19 +148,19 @@ See [Subagents and swarms](subagents.md) for graph shape, joins, KV sharing, rec
 
 ## Safety limits
 
-- `limits.max_nodes`: maximum requests in one top-level session tree, and in a plan joined into `scenario.json`.
-- `limits.max_sessions`: maximum protocol sessions, including descendants, in one tree and in a joined plan.
-- `limits.max_total_input_tokens`: maximum summed input length of a tree and of a joined plan.
+- `limits.max_nodes`: maximum requests in one top-level session tree.
+- `limits.max_sessions`: maximum protocol sessions, including descendants, in one tree.
+- `limits.max_total_input_tokens`: maximum summed input length of one tree.
 
-A tree that reaches a limit is cut short. A plan too large to join still runs with `generate`, which plans trees one at a time; `plan` then writes only `plan-summary.json`. These limits bound planner memory; they do not cap live HTTP concurrency, which comes from the load model and the target's latency.
+A tree that reaches a limit is cut short. Trees are planned one at a time, so the limits apply per tree, not to the whole plan. These limits bound planner memory; they do not cap live HTTP concurrency, which comes from the load model and the target's latency.
 
 ## Reproducibility
 
-The plan records a resolved-profile SHA-256 digest and, for joined plans, a scenario SHA-256 digest. Given the same binary behavior and config, the same seed produces the same arrival times, top-level session trees, descendant graph, token labels, and samples. Runtime request IDs and measured timing are intentionally run-specific. `session_topology` in `scenario.json` separates configured top-level streams from generated child protocol sessions.
+The plan records a resolved-profile SHA-256 digest. Given the same binary behavior and config, the same seed produces the same arrival times, top-level session trees, descendant graph, token labels, and samples. Runtime request IDs and measured timing are intentionally run-specific.
 
 ## Defaults
 
-The defaults are starting points for repeatable simulation, not claims that any Claude Code or Codex deployment has these exact distributions. Some are a plausible synthetic baseline, some are deliberately stress-oriented so short runs cover compaction and recursion, and the limits only protect planner memory. `scenario.json.config` and `plan-summary.json.load` record the resolved values of a plan. `fixed(x)`, `uniform(a, b)`, and `log_normal(median, sigma, min, max)` abbreviate the distributions above.
+The defaults are starting points for repeatable simulation, not claims that any Claude Code or Codex deployment has these exact distributions. Some are a plausible synthetic baseline, some are deliberately stress-oriented so short runs cover compaction and recursion, and the limits only protect planner memory. `plan-summary.json.load` records the resolved load of a plan. `fixed(x)`, `uniform(a, b)`, and `log_normal(median, sigma, min, max)` abbreviate the distributions above.
 
 ### Identity and seed
 
@@ -218,7 +194,7 @@ These are top-level session streams. Subagents are generated within those sessio
 
 | Field | Default | Why |
 |---|---:|---|
-| `tokens.block_size` | `16` | Matches the common Dynamo replay block granularity and keeps prefix topology compact. Override it to match the target trace or engine contract. |
+| `tokens.block_size` | `16` | Matches the common Dynamo KV block granularity and keeps prefix topology compact. Override it to match the target engine. |
 | `tokens.system_prefix_tokens` | `fixed(7000)` | A neutral harness instruction surface. Measure the deployed harness version and override; Claude Code and Codex surfaces have been observed near `12000` and `11000`. |
 | `tokens.tool_catalog_tokens` | `fixed(11000)` | A neutral tool-schema surface. Observed harness catalogs range from roughly `9000` (Codex) to `14000` (Claude Code). |
 | `tokens.repository_tokens` | `log_normal(2000, 0.7, 256, 12000)` | Creates a root-tree prefix shared by a parent and all descendants, with a long tail for larger repository context. |
@@ -289,7 +265,7 @@ Tool class inclusion materially changes time-weighted parallelism. Fit weights a
 
 | Field | Default | Why |
 |---|---:|---|
-| `limits.max_nodes` | `10000` | Bounds the number of materialized model-request nodes. |
+| `limits.max_nodes` | `10000` | Bounds the number of model requests planned for one tree. |
 | `limits.max_sessions` | `1000` | Bounds roots plus recursively generated child sessions. |
 | `limits.max_total_input_tokens` | `250000000` | Bounds aggregate plan size before HTTP payload construction. |
 

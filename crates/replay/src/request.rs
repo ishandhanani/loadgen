@@ -50,10 +50,8 @@ pub(super) fn prepare_request(
     });
     let tokens = dictionary.synthesize(&request)?;
     body["nvext"] = json!({"token_data": tokens});
-    if let Some(output_budget_tokens) = execution.output_budget_tokens {
-        body["max_tokens"] = json!(output_budget_tokens);
-        body["ignore_eos"] = json!(true);
-    }
+    body["max_tokens"] = json!(execution.output_budget_tokens);
+    body["ignore_eos"] = json!(true);
 
     let mut builder = client
         .post(target)
@@ -74,7 +72,6 @@ pub(super) fn prepare_request(
     let metadata = PreparedMetadata {
         ordinal: request.ordinal,
         source_request_id: request.source_request_id,
-        source_x_request_id: request.source_x_request_id,
         replay_request_id,
         agent_context: request.agent_context,
         input_tokens: request.input_tokens,
@@ -87,12 +84,9 @@ pub(super) fn prepare_request(
     })
 }
 
-pub(super) fn scaled_offset_ns(offset_ms: u64, time_scale: f64) -> Result<u64> {
-    let scaled = offset_ms as f64 * 1_000_000.0 / time_scale;
-    if !scaled.is_finite() || scaled < 0.0 || scaled > u64::MAX as f64 {
-        bail!("scaled replay timestamp is outside the u64 nanosecond range");
-    }
-    Ok(scaled.round_ties_even() as u64)
+pub(super) fn ms_to_ns(ms: u64) -> Result<u64> {
+    ms.checked_mul(1_000_000)
+        .context("timestamp is outside the u64 nanosecond range")
 }
 
 /// Build the HTTP client and open its first connection with `GET /v1/models`.
@@ -164,9 +158,6 @@ pub(super) fn validate_options(options: &ReplayOptions) -> Result<()> {
     if options.model.trim().is_empty() {
         bail!("model must not be empty");
     }
-    if !options.time_scale.is_finite() || options.time_scale <= 0.0 {
-        bail!("time_scale must be a positive finite number");
-    }
     for (name, value) in &options.static_headers {
         if is_managed_header(name) {
             bail!("static header {name:?} is owned by agent-loadgen");
@@ -181,7 +172,7 @@ pub(super) fn validate_options(options: &ReplayOptions) -> Result<()> {
 
 /// How many requests the client may have in flight at once.
 ///
-/// The profile or trace decides concurrency; this only keeps the machine
+/// The profile decides concurrency; this only keeps the machine
 /// running the load from exhausting file descriptors, since an HTTP/1.1
 /// request holds its own connection. The soft open-file limit is raised to the
 /// hard limit, and some descriptors stay reserved for everything else.
@@ -298,8 +289,9 @@ async fn perform_request(
         Ok(stream) => {
             result.ttft_ms = stream.ttft_ms;
             result.observed_output_tokens = stream.output_tokens;
-            result.output_length_match = expected_output_tokens
-                .and_then(|expected| stream.output_tokens.map(|tokens| tokens == expected as u64));
+            result.output_length_match = stream
+                .output_tokens
+                .map(|tokens| tokens == u64::from(expected_output_tokens));
         }
         Err(error) => result.error = Some(error.to_string()),
     }
@@ -333,7 +325,6 @@ fn request_result_shell(
     RequestResult {
         ordinal: prepared.metadata.ordinal,
         source_request_id: prepared.metadata.source_request_id.clone(),
-        source_x_request_id: prepared.metadata.source_x_request_id.clone(),
         replay_request_id: prepared.metadata.replay_request_id.clone(),
         session_id,
         parent_session_id,

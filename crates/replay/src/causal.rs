@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared closed-loop execution for captured and generated agent graphs.
+//! Closed-loop execution of generated agent graphs.
 //!
 //! A workload is a sequence of chunks. Each chunk is a request DAG with
 //! chunk-local dependencies. A chunk starts either at a scheduled offset or a
@@ -18,7 +18,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use super::artifacts::{ResultSink, RunAccumulator};
-use super::request::{scaled_offset_ns, send_request};
+use super::request::{ms_to_ns, send_request};
 use super::{PreparedRequest, ReplayContext, ReplayOptions, RequestResult, duration_ns};
 use crate::clock::sleep_until;
 use agent_loadgen_core::scheduler::ReadyQueue;
@@ -122,14 +122,13 @@ pub(crate) async fn execute_causally<W: CausalWorkload>(
         ready: ReadyQueue::with_capacity(0),
         sink: ResultSink::create(&options.output_dir.join("requests.jsonl"))?,
         base,
-        time_scale: options.time_scale,
         start_deadline_ns: None,
         stopped: false,
     };
     scheduler.start_deadline_ns = scheduler
         .workload
         .start_deadline_ms()
-        .map(|ms| scaled_offset_ns(ms, options.time_scale))
+        .map(ms_to_ns)
         .transpose()?;
     let load_ahead_ns = duration_ns(LOAD_AHEAD);
     let stop_ns = options.stop_after.map(duration_ns);
@@ -265,7 +264,6 @@ struct Scheduler<'a, W: CausalWorkload> {
     ready: ReadyQueue<(usize, usize)>,
     sink: ResultSink,
     base: Instant,
-    time_scale: f64,
     start_deadline_ns: Option<u64>,
     /// After `stop_after`, completions record results but release nothing.
     stopped: bool,
@@ -287,7 +285,7 @@ impl<W: CausalWorkload> Scheduler<'_, W> {
             if self.next_scheduled.is_none() && !self.scheduled_exhausted {
                 match self.workload.next_scheduled()? {
                     Some((start_ms, chunk)) => {
-                        let start_ns = scaled_offset_ns(start_ms, self.time_scale)?;
+                        let start_ns = ms_to_ns(start_ms)?;
                         if self
                             .start_deadline_ns
                             .is_some_and(|deadline| start_ns >= deadline)
@@ -368,7 +366,7 @@ impl<W: CausalWorkload> Scheduler<'_, W> {
             )?);
             self.ready.push(
                 start_ns
-                    .checked_add(scaled_offset_ns(offset_ms, self.time_scale)?)
+                    .checked_add(ms_to_ns(offset_ms)?)
                     .context("causal chunk start timestamp overflow")?,
                 base_ordinal + node,
                 (id, node),
@@ -413,10 +411,7 @@ impl<W: CausalWorkload> Scheduler<'_, W> {
             let completion = &mut live.dependency_completion_ns[successor];
             *completion = (*completion).max(completed_ns);
             if live.remaining_dependencies[successor] == 0 {
-                let delay_ns = scaled_offset_ns(
-                    live.chunk.nodes[successor].delay_after_dependencies_ms,
-                    self.time_scale,
-                )?;
+                let delay_ns = ms_to_ns(live.chunk.nodes[successor].delay_after_dependencies_ms)?;
                 if live.prepared[successor].is_some() {
                     bail!("{name} chunk {id} node {successor} was prepared twice");
                 }
@@ -441,7 +436,7 @@ impl<W: CausalWorkload> Scheduler<'_, W> {
         }
         if anchor && let Some((delay_ms, next)) = self.workload.successor(id)? {
             let start_ns = completed_ns
-                .checked_add(scaled_offset_ns(delay_ms, self.time_scale)?)
+                .checked_add(ms_to_ns(delay_ms)?)
                 .context("causal successor chunk timestamp overflow")?;
             if !self
                 .start_deadline_ns

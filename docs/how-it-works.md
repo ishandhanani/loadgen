@@ -4,59 +4,32 @@
 
 [Watch a 78-second visual overview](assets/agent-loadgen-concepts.mp4) of the ideas on this page: growing agent contexts, the KV-prefix trie, causal timing with subagents, arrival schedules, and harness headers.
 
-`agent-loadgen` has two graph producers and one causal timing contract:
+`agent-loadgen` turns a profile into a seeded dependency graph and sends it with one causal timing contract:
 
 ```text
-captured trace                         generated profile
-      |                                      |
-      v                                      v
-Dynamo-style DAG lowering              seeded dependency graph
-      |                                      |
-      +------------------+-------------------+
-                         |
-                         v
-               synthetic token request
-                         |
-                         v
-                Dynamo Chat Completions
+generated profile
+        |
+        v
+seeded dependency graph
+        |
+        v
+synthetic token request
+        |
+        v
+Dynamo Chat Completions
 ```
 
-- Captured roots use recorded offsets. Captured dependent turns use actual replay completions plus recorded residual delays.
-- Generated roots use configured offsets. Generated dependent turns use actual completions plus sampled delays.
+Roots start at configured offsets. Dependent turns start after actual completions plus sampled delays.
 
-## Shared request path
+## Request path
 
-Both modes use the same request and result path:
-
-1. Convert trace hashes or generated block labels into deterministic token IDs.
+1. Convert generated block labels into deterministic token IDs.
 2. Send the IDs through `nvext.token_data` with valid dummy Chat Completions messages.
 3. Add the harness session, subagent, and compaction headers of the `--headers` dialect, plus `x-dynamo-session-final` on a session's last request when `--dynamo-session-final` is set.
 4. Stream the response and record TTFT, completion usage, status, and selected Dynamo headers.
 5. Hand the result to a dedicated writer thread, which appends it to `requests.jsonl` and updates the run statistics, so a slow disk never delays scheduling.
 
-Equal source block hashes always produce equal synthetic token blocks. Different hashes receive different codewords within the validated dictionary capacity. This preserves KV-prefix equality without preserving prompt text or production token IDs.
-
-## Captured replay
-
-```text
-JSONL or gzip shards
-        |
-        v
-request ends + terminal tool events
-        |
-        v
-session and parent-session DAG lowering
-        |
-        v
-roots: recorded offsets
-dependents: completion + recorded gap
-```
-
-The trace loader validates all selected records before traffic starts. It rejects missing agent context, missing replay hashes, mixed block sizes, duplicate request IDs, zero-token input/output records, and cyclic dependencies.
-
-Each session is sequential. Parent/child context adds subagent launch and join edges. Exact Claude tool metadata wins when present; otherwise Dynamo's timestamp association rules infer the parent request around the child lifetime. Ready requests are never dropped; if the client runs short of file descriptors, they wait for a free slot.
-
-See [Trace replay](replay.md) for the exact trace and timing contract.
+Equal block labels always produce equal synthetic token blocks. Different hashes receive different codewords within the validated dictionary capacity. This preserves KV-prefix equality without preserving prompt text or production token IDs.
 
 ## Generated traffic
 
@@ -71,9 +44,7 @@ Generation has a planning phase and an execution phase.
 - Dependencies and delay after dependency completion.
 - Tool, subagent, swarm, or compaction metadata.
 
-`plan-summary.json` summarizes a sample of trees for plans of any size. A plan that fits `limits.max_nodes` is also joined into one graph and written to `scenario.json`. Runtime model text never changes the plan.
-
-The artifact also reports realized tool parallelism in two forms: the fraction of calls belonging to multi-call phases and the fraction of synthetic tool wall time with concurrent calls. This keeps high call batching from being mistaken for equally high time parallelism.
+`plan-summary.json` summarizes a sample of trees for plans of any size. Runtime model text never changes the plan.
 
 ### Execution
 
@@ -94,7 +65,7 @@ dependencies complete
                  release successors
 ```
 
-The executor admits work one chunk at a time. A generated chunk is one top-level session tree; a captured trace is a single chunk. A chunk starts at a scheduled offset, such as a tree's arrival time, or a delay after its predecessor's anchor request completes, such as a stream's restart after the previous tree's root session ends. A chunk is planned about two seconds before it starts and dropped when its last request completes.
+The executor admits work one chunk at a time. A chunk is one top-level session tree. A chunk starts at a scheduled offset, such as a tree's arrival time, or a delay after its predecessor's anchor request completes, such as a stream's restart after the previous tree's root session ends. A chunk is planned about two seconds before it starts and dropped when its last request completes.
 
 With streams, `load.concurrent_sessions` creates fixed top-level session streams. The first session tree in each stream follows the configured startup spacing. After its root session's last response completes, the stream starts its next tree after `restart_delay_ms`. With an arrival schedule, trees start at their sampled arrival times regardless of how fast earlier trees finish.
 
@@ -148,35 +119,36 @@ See [Compaction](compaction.md) for trigger logic, attempt semantics, retained c
 - `ttft_ms`: time from dispatch to first output.
 - `total_time_ms`: time from dispatch to stream completion.
 
-Frontend-observed arrival is different from client dispatch. A Dynamo request trace captured during the run records it; join the two by `x-request-id`.
+Frontend-observed arrival is different from client dispatch. A Dynamo request trace recorded during the run has it; join the two by `x-request-id`.
 
 ## Artifacts and claims
 
-`run.json` labels the protocol surface, traffic kind, and HTTP version, and reports achieved throughput with TTFT, request latency, and time-per-output-token percentiles. `timeline.csv` breaks the same measurements into one-minute buckets. A run passes when every sent request succeeded with its planned output length; client dispatch lag is reported, not gated.
+`run.json` records the HTTP version and what the run planned, and reports achieved throughput with TTFT, request latency, and time-per-output-token percentiles. `timeline.csv` breaks the same measurements into one-minute buckets. A run passes when every sent request succeeded with its planned output length; client dispatch lag is reported, not gated.
 
 Cache policy remains outside this project.
 
 ## Crate map
 
 ```text
-                 agent-loadgen CLI
-                        |
-                        v
-                      replay
-                    /        \
-                trace       generate
-                    \        /
-                      core
+agent-loadgen CLI
+        |
+        v
+      replay
+        |
+        v
+     generate
+        |
+        v
+       core
 ```
 
-`core` has no I/O or workload policy. Trace ingestion and synthetic planning stay independent; replay is the runtime that consumes either planned workload.
+`core` has no I/O or workload policy. `generate` plans traffic; `replay` is the runtime that sends it.
 
 | Crate | Responsibility |
 |---|---|
 | `agent-loadgen-core` | Public request and agent-context contracts, percentile summaries, and the stable ready-time queue. |
-| `agent-loadgen-trace` | Trace v1 parsing and agentic causal lowering. |
 | `agent-loadgen-generate` | Neutral defaults, strict TOML profile validation, seeded distributions, and generated scenario planning. |
-| `agent-loadgen-replay` | Token shaping, request transport, harness headers, captured and generated causal schedulers, and run artifacts. |
+| `agent-loadgen-replay` | Token shaping, request transport, harness headers, the causal scheduler, and run artifacts. |
 | `agent-loadgen` | CLI flags and command wiring only. |
 
 `AGENTS.md` records the dependency rules between the crates.

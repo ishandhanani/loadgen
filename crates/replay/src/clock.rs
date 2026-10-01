@@ -5,7 +5,7 @@
 //!
 //! Linux uses a one-shot `timerfd` through Tokio's I/O reactor. Other platforms
 //! use Tokio's timer. The scheduler awaits one deadline at a time, so only one
-//! timer is live regardless of the number of requests in a trace.
+//! timer is live regardless of the number of requests in a run.
 
 use std::time::Instant;
 
