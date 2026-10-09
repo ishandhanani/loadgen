@@ -32,6 +32,11 @@ Each top-level session tree samples from its own random stream, derived from the
 
 `plan` and `generate` both write `plan-summary.json`: session-tree and request statistics from up to 1,000 sampled trees, expected totals, the ideal prefix-cache hit rate, and, for arrivals, the per-bucket session starts and expected request rate.
 
+`export-plan` writes the same summary and streams every tree from a finite plan to `trees.jsonl`.
+The export preserves deterministic request dependencies, block hashes, tool events, session
+lineage, and compaction metadata for offline analysis. Duration-bounded streams do not have a
+finite tree count until they execute, so they must set `load.num_sessions` before export.
+
 ## Minimal profile
 
 ```toml

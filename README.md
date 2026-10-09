@@ -29,6 +29,15 @@ Plan a profile to see what it would send, without sending anything:
 agent-loadgen plan --config profiles/diurnal-8h.toml --output artifacts/diurnal-plan
 ```
 
+Export every deterministic session tree from a finite profile for offline analysis:
+
+```bash
+agent-loadgen export-plan --config profiles/swe-bench.toml --output artifacts/swe-bench-plan
+```
+
+This writes `trees.jsonl` alongside `plan-summary.json`. Duration-bounded streams must set
+`load.num_sessions` before they can be exported.
+
 Then run it against a deployment, here with Claude Code's headers, and stop after two hours:
 
 ```bash
@@ -65,6 +74,10 @@ Start from a checked-in profile. Each states which of its values were measured a
 ## Planning
 
 `agent-loadgen plan` writes `plan-summary.json` for a plan of any size from up to 1,000 sampled session trees: requests, sessions, and client-side delay per tree; input and output token percentiles; the ideal prefix-cache hit rate, with unlimited cache and ideal routing; expected totals; and, for schedules, the sessions and requests expected in each bucket. Compare it with the traffic you are matching before you send any.
+
+`agent-loadgen export-plan` additionally streams every tree from a finite plan to `trees.jsonl`.
+Each row includes request dependencies, logical block hashes, output budgets, tool events, session
+lineage, compaction attempts, and final-session markers. It does not execute requests or tools.
 
 ## Running
 

@@ -63,6 +63,17 @@ pub enum Command {
         output: PathBuf,
     },
 
+    /// Export every deterministic session tree from a finite profile.
+    ExportPlan {
+        /// Versioned TOML generator config.
+        #[arg(long)]
+        config: PathBuf,
+
+        /// Output directory for plan-summary.json and trees.jsonl.
+        #[arg(long)]
+        output: PathBuf,
+    },
+
     /// Generate and run seeded coding-agent traffic, planning each session tree when it starts.
     Generate {
         /// Versioned TOML generator config.

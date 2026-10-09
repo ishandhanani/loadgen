@@ -8,6 +8,8 @@ use agent_loadgen_core::TraceRequest;
 #[derive(Debug, Clone, Serialize)]
 pub struct PlannedTree {
     pub index: usize,
+    /// Absolute planned start offset for an open-loop arrival; absent for closed-loop streams.
+    pub top_level_arrival_ms: Option<u64>,
     /// For streams, the delay after the slot's previous tree before this one starts.
     pub restart_delay_ms: u64,
     /// The root session's last request, which ends the tree for its stream.
