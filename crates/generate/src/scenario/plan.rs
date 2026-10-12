@@ -132,6 +132,10 @@ impl TreePlanner {
         builder.mark_session_finals()?;
         Ok(PlannedTree {
             index,
+            top_level_arrival_ms: self
+                .arrivals
+                .as_ref()
+                .and_then(|arrivals| arrivals.arrival_ms.get(index).copied()),
             restart_delay_ms,
             root_final,
             total_input_tokens: builder.total_input_tokens,

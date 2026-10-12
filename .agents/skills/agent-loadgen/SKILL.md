@@ -5,7 +5,7 @@ description: Generate realistic LLM traffic with agent-loadgen and run it agains
 
 # agent-loadgen
 
-agent-loadgen sends synthetic requests whose shape is real: token counts, prefix sharing, session structure, tool and human delays, and arrival times. Prompt text is meaningless. A profile (TOML) describes the traffic; `plan` checks it without sending anything; `generate` sends it.
+agent-loadgen sends synthetic requests whose shape is real: token counts, prefix sharing, session structure, tool and human delays, and arrival times. Prompt text is meaningless. A profile (TOML) describes the traffic; `plan` checks it without sending anything; `export-plan` writes finite deterministic trees for offline analysis; `generate` sends them.
 
 Read these when you need detail: `docs/workloads.md` (the procedure below, longer), `docs/generator.md` (every profile field and default), `docs/headers.md` (what each `--headers` dialect sends).
 
@@ -58,7 +58,15 @@ If the build fails with `could not execute process 'sccache ...'`, prefix it wit
    - Concurrency comes from the profile and the target's latency; there is no concurrency flag. The client only guards its own file descriptors: if `run.json` shows `peak_in_flight` equal to `in_flight_limit`, raise `ulimit -n` and rerun.
    - For a mix, start one `generate` per profile at the same time, each with its own `--output`.
    - On a SLURM cluster, run it as an srt-slurm custom benchmark: `examples/srt-slurm/` has a recipe and scripts.
-6. **Read the results** in the output directory:
+6. **Export finite trees** when offline analysis needs exact request dependencies, block hashes, tool events, session lineage, or compaction metadata:
+
+   ```bash
+   target/release/agent-loadgen export-plan --config profiles/swe-bench.toml \
+     --output plans/swe-bench-export
+   ```
+
+   This writes `trees.jsonl` and `plan-summary.json` without sending traffic. Duration-bounded streams must set `load.num_sessions` because execution latency otherwise determines how many trees start.
+7. **Read the results** in the output directory:
    - `run.json`: `passed` (every sent request succeeded with its planned output length; the command exits non-zero otherwise), `failed`, `stopped_early`, `http_version`, `peak_in_flight` (the most requests in flight at once; under arrivals, the concurrency the load produced), and `performance` (requests and tokens per second; TTFT, request latency, and time-per-output-token percentiles).
    - `timeline.csv`: one row per minute with requests, failures, root sessions started, request and token rates, and TTFT and latency percentiles. Compare it with the plan's arrival buckets.
    - `requests.jsonl`: one row per request. `replay_request_id` is the request's `x-request-id`, which joins it with Dynamo request traces and engine logs.
