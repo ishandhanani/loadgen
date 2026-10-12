@@ -187,7 +187,7 @@ mod tests {
         let output = tempdir().unwrap();
 
         let artifact = write_tree_artifacts(&planner, output.path()).unwrap();
-        let rows = BufReader::new(File::open(&artifact["path"].as_str().unwrap()).unwrap())
+        let rows = BufReader::new(File::open(artifact["path"].as_str().unwrap()).unwrap())
             .lines()
             .collect::<std::io::Result<Vec<_>>>()
             .unwrap();
