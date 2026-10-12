@@ -22,7 +22,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plan-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--play-id-prefix", default="agent-task")
+    parser.add_argument(
+        "--play-id-dynosim",
+        default="agent-task",
+        help="Program-ID label for DynoSim; each tree's number is appended.",
+    )
     return parser.parse_args()
 
 
@@ -81,7 +85,7 @@ def main() -> None:
                         f"expected {expected_tree_index}, found {tree_index}"
                     )
                 nodes = tree["nodes"]
-                play_id = f"{args.play_id_prefix}-{tree_index:04d}"
+                play_id = f"{args.play_id_dynosim}-{tree_index:04d}"
                 request_ids = [
                     node["request"]["source_request_id"] for node in nodes
                 ]
