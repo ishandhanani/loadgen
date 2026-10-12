@@ -78,6 +78,8 @@ Start from a checked-in profile. Each states which of its values were measured a
 `agent-loadgen export-plan` additionally streams every tree from a finite plan to `trees.jsonl`.
 Each row includes request dependencies, logical block hashes, output budgets, tool events, session
 lineage, compaction attempts, and final-session markers. It does not execute requests or tools.
+See the [DynoSim example](examples/dynosim/README.md) to convert this plan into an
+`agentic_mooncake` replay trace.
 
 ## Running
 
