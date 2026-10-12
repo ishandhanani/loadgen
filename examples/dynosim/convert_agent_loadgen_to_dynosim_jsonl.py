@@ -44,6 +44,105 @@ def read_trees(source: TextIO):
             yield json.loads(line)
 
 
+def depends_on(nodes: list[dict], index: int, ancestor: int) -> bool:
+    pending = list(nodes[index]["dependencies"])
+    visited = set()
+    while pending:
+        dependency = pending.pop()
+        if dependency == ancestor:
+            return True
+        if dependency > ancestor and dependency not in visited:
+            visited.add(dependency)
+            pending.extend(nodes[dependency]["dependencies"])
+    return False
+
+
+def compaction_transitions(
+    tree: dict, play_id: str,
+) -> tuple[set[tuple[int, int]], list[dict], dict[int, int]]:
+    """Validate planned adoption; do not infer runtime success from a header.
+
+    Codex awaits compaction before continuing this session, and installs the
+    replacement history only after a completed compaction response:
+    https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/session/turn.rs#L618-L652
+    https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/compact_remote_v2.rs#L294-L368
+    """
+    transitions = set()
+    records = []
+    previous_by_session = {}
+    operation_ids = set()
+    completion_waits = {}
+    nodes = tree["nodes"]
+    for index, node in enumerate(nodes):
+        if any(type(dep) is not int or not 0 <= dep < index for dep in node["dependencies"]):
+            raise ValueError("dependencies must reference earlier nodes")
+    for index, node in enumerate(nodes):
+        request = node["request"]
+        session_id = request["agent_context"]["session_id"]
+        request_id = request["source_request_id"]
+        attempt = node.get("compaction_attempt")
+        epoch = node.get("window_epoch", 0)
+        if type(epoch) is not int or epoch < 0:
+            raise ValueError(f"request {request_id} has an invalid window_epoch")
+        common = {
+            "play_id": play_id, "session_id": session_id, "request_id": request_id,
+        }
+        if attempt is not None:
+            # The v2 replay schema has no cancellation deadline or duplicate
+            # lifecycle. A zero logical output is not a zero-cost attempt.
+            if (attempt["expected_effect"] != "apply_once"
+                    or attempt["attempt"] != 1
+                    or attempt.get("abort_after_ms") is not None):
+                raise ValueError(
+                    f"compaction request {request_id} requires replay lifecycle support "
+                    "for aborted/duplicate attempts; use abort_probability=0 and "
+                    "retry_probability=0 for this converter"
+                )
+            if "window_epoch" not in node:
+                raise ValueError(f"compaction request {request_id} is missing window_epoch")
+            operation_id = attempt["operation_id"]
+            if not operation_id or operation_id in operation_ids:
+                raise ValueError(f"duplicate or empty compaction operation: {operation_id!r}")
+            operation_ids.add(operation_id)
+            if (request["output_tokens"] <= 0
+                    or request["output_tokens"] != node["output_budget_tokens"]):
+                raise ValueError(f"compaction request {request_id} has an inconsistent output budget")
+            records.append({
+                "event": "compaction_attempt", **common, "window_epoch": epoch,
+                "compaction_attempt": attempt,
+                "output_budget_tokens": node["output_budget_tokens"],
+            })
+
+        previous_index = previous_by_session.get(session_id)
+        if previous_index is None:
+            if epoch != 0:
+                raise ValueError(f"session {session_id} starts after an unrecorded compaction")
+        else:
+            previous = nodes[previous_index]
+            previous_epoch = previous.get("window_epoch", 0)
+            previous_attempt = previous.get("compaction_attempt")
+            if attempt is not None and previous_index not in node["dependencies"]:
+                if not depends_on(nodes, index, previous_index):
+                    raise ValueError(f"compaction request {request_id} must wait for its predecessor")
+                # A blocking child join can provide the causal path. Spawn
+                # edges export as dispatch, so also preserve parent completion
+                # before compaction (Codex's awaited continuation above).
+                completion_waits[index] = previous_index
+            if previous_attempt is not None or epoch != previous_epoch:
+                if (previous_attempt is None or epoch != previous_epoch + 1
+                        or previous_index not in node["dependencies"]):
+                    raise ValueError(f"request {request_id} has an unproven compaction transition")
+                transitions.add((previous_index, index))
+                records.append({
+                    "event": "context_transition", **common,
+                    "operation_id": previous_attempt["operation_id"],
+                    "compaction_request_id": previous["request"]["source_request_id"],
+                    "old_window_epoch": previous_epoch, "new_window_epoch": epoch,
+                })
+        previous_by_session[session_id] = index
+    return transitions, records, completion_waits
+
+
 def main() -> None:
     args = parse_args()
     summary = json.loads((args.plan_dir / "plan-summary.json").read_text())
@@ -54,10 +153,13 @@ def main() -> None:
     input_tokens = 0
     output_tokens = 0
     full_prefix_edges = 0
+    compaction_transition_count = 0
+    compaction_metadata = args.output.with_name(args.output.name + ".compaction.jsonl")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with tree_path.open() as source, args.output.open("w") as sink:
+        with (tree_path.open() as source, args.output.open("w") as sink,
+              compaction_metadata.open("w") as metadata_sink):
             trees = read_trees(source)
             first_tree = next(trees, None)
             if first_tree is None or not first_tree["nodes"]:
@@ -76,6 +178,10 @@ def main() -> None:
                 },
             }
             sink.write(json.dumps(header, separators=(",", ":")) + "\n")
+            metadata_sink.write(json.dumps({
+                "schema": "agent_loadgen.compaction", "version": 1,
+                "source": header["source"],
+            }, separators=(",", ":")) + "\n")
 
             for expected_tree_index, tree in enumerate(chain([first_tree], trees)):
                 tree_index = int(tree["index"])
@@ -86,6 +192,10 @@ def main() -> None:
                     )
                 nodes = tree["nodes"]
                 play_id = f"{args.play_id_dynosim}-{tree_index:04d}"
+                transitions, records, completion_waits = compaction_transitions(tree, play_id)
+                compaction_transition_count += len(transitions)
+                for record in records:
+                    metadata_sink.write(json.dumps(record, separators=(",", ":")) + "\n")
                 request_ids = [
                     node["request"]["source_request_id"] for node in nodes
                 ]
@@ -112,6 +222,8 @@ def main() -> None:
                     dependency_indexes = [
                         int(value) for value in node["dependencies"]
                     ]
+                    if node_index in completion_waits:
+                        dependency_indexes.append(completion_waits[node_index])
                     dependencies = []
                     for dependency_index in dependency_indexes:
                         dependency_node = nodes[dependency_index]
@@ -146,7 +258,7 @@ def main() -> None:
                         if (
                             dependency_context.get("session_id")
                             == context.get("session_id")
-                            and not node.get("compaction_attempt")
+                            and (dependency_index, node_index) not in transitions
                         ):
                             prior_hashes = dependency_node["request"][
                                 "input_sequence_hashes"
@@ -207,6 +319,7 @@ def main() -> None:
             raise ValueError(f"converted totals differ from source plan: {mismatches}")
     except Exception:
         args.output.unlink(missing_ok=True)
+        compaction_metadata.unlink(missing_ok=True)
         raise
 
     print(
@@ -214,6 +327,10 @@ def main() -> None:
             {
                 "output": str(args.output),
                 "source_sha256": source_digest,
+                "trace_sha256": file_sha256(args.output),
+                "compaction_metadata": str(compaction_metadata),
+                "compaction_metadata_sha256": file_sha256(compaction_metadata),
+                "compaction_transitions": compaction_transition_count,
                 "trees": tree_count,
                 "requests": request_count,
                 "input_tokens": input_tokens,

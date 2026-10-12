@@ -24,3 +24,5 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --workspace --all-targets
+      - name: Test DynoSim converter
+        run: python3 -m unittest discover -s examples/dynosim -p 'test_*.py'

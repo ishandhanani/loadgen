@@ -438,9 +438,9 @@ impl<W: CausalWorkload> Scheduler<'_, W> {
             let start_ns = completed_ns
                 .checked_add(ms_to_ns(delay_ms)?)
                 .context("causal successor chunk timestamp overflow")?;
-            if !self
+            if self
                 .start_deadline_ns
-                .is_some_and(|deadline| start_ns >= deadline)
+                .is_none_or(|deadline| start_ns < deadline)
             {
                 self.pending_starts.push(start_ns, next, next);
             }

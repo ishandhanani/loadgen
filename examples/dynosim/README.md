@@ -1,9 +1,18 @@
 # Export an agent-loadgen plan for DynoSim
 
 > [!NOTE]
-> The converter targets the `agentic_mooncake` replay format specifically. It has been correctness-tested with the agent-loadgen SWE-bench preset @ [`119f6480fae6`](https://github.com/NVIDIA-dev/agent-loadgen/blob/119f6480fae6d84244f70ae5387c754d2f430deb/profiles/swe-bench.toml); the preset does not include subagents nor compaction events. Also see the TODO list at the end of this README.
+> The converter targets the `agentic_mooncake` replay format specifically. The SWE-bench baseline contains no compactions. Successful single-attempt compaction is covered separately by converter regression tests; aborted/duplicate attempts are rejected. See the TODO list below.
 
 This example converts a finite agent-loadgen plan into DynoSim's `agentic_mooncake` JSONL format. The first row declares `"schema": "dynamo.agentic_mooncake"` and `"version": 2`, the trace schema version required by the replay parser. The output preserves request dependencies, session lineage, cumulative block hashes, dependency delays, tool classes, and deterministic source ordering through `source_play_ordinal`.
+
+Prompts may change prefix after validated compaction. The converter also writes
+an adjacent sidecar with planned attempt/window metadata: `trace.jsonl` produces
+`trace.jsonl.compaction.jsonl`.
+The current replay reader does not consume this sidecar; it is reserved for
+the compaction hint policy. These are planned transitions, not runtime cache acknowledgments.
+The ordering follows Codex 0.162.1: [await compaction](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/session/turn.rs#L618-L652),
+then [install replacement history](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/compact_remote_v2.rs#L294-L368).
+Synthetic summary contents and timings are not calibrated to Codex.
 
 
 ## Step 1: Export agent-loadgen data as session trees:
@@ -56,5 +65,5 @@ For finite stream profiles, set `agentic_lanes` to the desired closed-loop concu
 ## TODO
 
 - Preserve per-stream `restart_delay_ms`. DynoSim currently assigns a new play immediately when an agentic lane becomes free; this omits the 1–5 second restart delay configured by `profiles/swe-bench.toml`.
-- Define and validate compaction conversion, including explicit compaction signals, aborted and duplicate attempts, output budgets, and the post-compaction lineage transition. Compaction behavior has not been tested with the SWE-bench profile.
+- Extend conversion to preserve aborted/duplicate compaction attempts once DynoSim supports their cancellation timing and output budgets.
 - Validate subagent conversion, including whether child dependencies should release on parent dispatch or completion and how spawn/join timing maps into AgenticMooncake. Subagent behavior has not been tested with the SWE-bench profile.
