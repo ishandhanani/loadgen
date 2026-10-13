@@ -22,7 +22,6 @@ If the build fails with `could not execute process 'sccache ...'`, prefix it wit
 1. **Split the description into kinds of traffic.** Each kind gets one profile and, at run time, one `generate` process; a company's mix runs as several processes at once. Typical kinds:
    - People using coding agents: start from `profiles/claude-code.toml` or `profiles/codex.toml`.
    - A batch evaluation with N parallel agents: start from `profiles/swe-bench.toml`.
-   - A shape fitted to production data: see `profiles/astra-fleet.toml`, whose header shows the fit-vs-measured table to aim for.
    - Plain API or chat calls (not agentic): write the one-request profile below.
 2. **Choose when sessions start** (the profile's `[load]`):
    - A population of users: `[load.arrivals]` with `bucket_minutes` and one rate per bucket, as `requests_per_second` (when the description counts requests) or `sessions_per_minute` (when it counts users or sessions). Hourly buckets describe a day; `interpolation = "linear"` smooths the steps.

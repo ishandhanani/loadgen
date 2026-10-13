@@ -67,7 +67,6 @@ Start from a checked-in profile. Each states which of its values were measured a
 | `profiles/codex.toml` | Interactive Codex sessions: parallel exec batches, asynchronous child threads, compaction at 90% of the context window. |
 | `profiles/swe-bench.toml` | A SWE-bench Verified evaluation: 500 tasks on 32 parallel agents. |
 | `profiles/diurnal-8h.toml` | The Claude Code shape under an eight-hour request-rate schedule. |
-| `profiles/astra-fleet.toml` | A production fleet's agent traffic, fitted to 1.16M requests, under its measured day of session starts. |
 
 [Generator configuration](docs/generator.md) defines every field and default.
 
